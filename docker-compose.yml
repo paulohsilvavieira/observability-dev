@@ -1,0 +1,51 @@
+services:
+  jaeger:
+    image: jaegertracing/jaeger:2.2.0
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true  # Habilita OTLP no Jaeger
+      - LOG_LEVEL=debug  # Ativa logs para debug
+    ports:
+      - "16686:16686"  
+      - "4317:4317"   
+      - "4318:4318"
+  prometheus:
+    image: prom/prometheus
+    command: ["--config.file=/prometheus/config.yaml"]
+    volumes:
+      - ./prometheus/config.yaml:/prometheus/config.yaml
+     
+    ports:
+      - 9090:9090
+  grafana:
+    image: grafana/grafana
+    ports:
+      - 3400:3000
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
+      - otel
+  loki:
+    image: grafana/loki:latest
+    ports:
+      - 3100:3100
+      - 9093:9093
+      - 9095:9095
+    command: -config.file=/etc/loki/local-config.yaml
+
+  otel:
+    container_name: otel-collector-service
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel-collector-config.yaml"]
+    volumes:
+      - ./otel/config.yaml:/etc/otel-collector-config.yaml
+    ports:
+      - "14317:4317"
+      - "14318:4318"
+      - "19464:9464"
+    depends_on:
+      - jaeger
+      - prometheus
+      - loki
+  
+

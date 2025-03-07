@@ -1,0 +1,31 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317" 
+      http:
+        endpoint: "0.0.0.0:4320"
+
+exporters:
+  otlp:
+    endpoint: "http://jaeger:4317"
+    tls:
+      insecure: true
+  loki:
+    endpoint: "http://loki:3100/loki/api/v1/push"
+  
+  prometheus:
+    endpoint: "0.0.0.0:9464"
+  debug: {}  
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [otlp, debug]
+    logs:
+      receivers: [otlp]
+      exporters: [loki, debug]
+    metrics:
+      receivers: [otlp]
+      exporters: [prometheus, debug]
