@@ -13,7 +13,6 @@ services:
     command: ["--config.file=/prometheus/config.yaml"]
     volumes:
       - ./prometheus/config.yaml:/prometheus/config.yaml
-     
     ports:
       - 9090:9090
   grafana:
