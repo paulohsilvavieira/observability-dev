@@ -2,9 +2,10 @@ auth_enabled: false
 
 server:
   http_listen_port: 3100
+  grpc_listen_port: 9096
 
 common:
-  path_prefix: /loki  # Define o diretório base para armazenamento
+  path_prefix: /loki
   storage:
     filesystem:
       chunks_directory: /loki/chunks
@@ -23,8 +24,8 @@ schema_config:
 
 storage_config:
   boltdb_shipper:
-    active_index_directory: /loki/index  # Local do índice ativo
-    cache_location: /loki/cache         # Local do cache
+    active_index_directory: /loki/index
+    cache_location: /loki/cache
 
 limits_config:
   allow_structured_metadata: false
@@ -35,3 +36,7 @@ compactor:
 table_manager:
   retention_deletes_enabled: true
   retention_period: 24h
+
+distributor:
+  otlp_http_listen_address: 0.0.0.0
+  otlp_grpc_listen_address: 0.0.0.0

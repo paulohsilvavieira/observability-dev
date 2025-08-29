@@ -45,6 +45,5 @@ services:
     depends_on:
       - jaeger
       - prometheus
-      - loki
   
 
