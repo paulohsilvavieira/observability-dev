@@ -5,28 +5,25 @@ receivers:
         endpoint: "0.0.0.0:4317" 
       http:
         endpoint: "0.0.0.0:4320"
-
+processors:
+  batch:
+    timeout: 100ms   # em vez de 5s
+    send_batch_size: 1
 exporters:
+  debug: {}
   otlp:
-    endpoint: "http://jaeger:4317"
+    endpoint: jaeger:4317
     tls:
       insecure: true
-  otlphttp/loki:
-    endpoint: "http://loki:3100/loki/api/v1/push"
-  
   prometheus:
     endpoint: "0.0.0.0:9464"
-    enable_open_metrics: true
-  debug: {}  
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
+      processors: [batch]
       exporters: [otlp, debug]
-    logs:
-      receivers: [otlp]
-      exporters: [otlphttp/loki, debug]
     metrics:
       receivers: [otlp]
       exporters: [prometheus, debug]
