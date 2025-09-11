@@ -39,11 +39,10 @@ services:
       - otel
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.4.2
     ports:
       - 3100:3100
-      - 9093:9093
-      - 9095:9095
+      - 9096:9096
     volumes:
       - ./loki/config.yaml:/etc/loki/local-config.yaml
     command: -config.file=/etc/loki/local-config.yaml

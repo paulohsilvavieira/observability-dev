@@ -4,7 +4,7 @@ receivers:
       grpc:
         endpoint: "0.0.0.0:4317" 
       http:
-        endpoint: "0.0.0.0:4320"
+        endpoint: "0.0.0.0:4318"
 processors:
   batch:
     timeout: 100ms   # em vez de 5s
@@ -17,6 +17,8 @@ exporters:
       insecure: true
   prometheus:
     endpoint: "0.0.0.0:9464"
+  otlphttp:
+    endpoint: http://loki:3100/otlp
 
 service:
   pipelines:
@@ -24,6 +26,9 @@ service:
       receivers: [otlp]
       processors: [batch]
       exporters: [otlp, debug]
+    logs:
+      receivers: [otlp]
+      exporters: [otlphttp, debug]
     metrics:
       receivers: [otlp]
       exporters: [prometheus, debug]
