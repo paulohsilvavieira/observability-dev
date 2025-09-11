@@ -29,8 +29,6 @@ const localFormat = () => combine(timestamp(), severity(), nestLike());
 const isLocal = process.env.NODE_ENV === 'development';
 
 export class LoggerConfig extends ConsoleLogger {
-  private sendToLoki = false; // flag para controlar envio
-
   private logger = winston.createLogger({
     level: process.env.NODE_ENV === 'development' ? 'debug' : 'info',
     format: isLocal ? localFormat() : remoteFormat(),
@@ -66,7 +64,6 @@ export class LoggerConfig extends ConsoleLogger {
   }
   enableLoki() {
     // ativa o Loki depois do bootstrap
-    this.sendToLoki = true;
     const lokiTransport = this.logger.transports.find(
       (t) => t instanceof LokiTransport,
     );
