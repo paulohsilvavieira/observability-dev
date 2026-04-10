@@ -1,0 +1,43 @@
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+      target: development
+    command: rails s -b 0.0.0.0 -p 3000
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/app
+      - bundle_path:/usr/local/bundle
+    working_dir: /app
+    ports:
+      - "3000:3000"
+      - "1234:1234"
+    depends_on:
+      - db
+      - redis
+      - rabbitmq
+    env_file:
+      - .env.docker
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: rails-boilerplate
+    ports:
+      - "45432:5432"
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+volumes:
+  bundle_path:
