@@ -1,8 +1,8 @@
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
-import { initalizeTracing } from './otel';
+import { initializeTracing } from './otel';
 import { LoggerConfig } from './logger.config';
-initalizeTracing();
+initializeTracing();
 
 async function bootstrap() {
   const logger = new LoggerConfig();

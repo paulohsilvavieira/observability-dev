@@ -6,8 +6,11 @@ const LokiTransport = require('winston-loki');
 import * as winston from 'winston';
 import * as dotenv from 'dotenv';
 import { utilities as nestWinstonUtils } from 'nest-winston';
+import { logs, SeverityNumber } from '@opentelemetry/api-logs';
 import { trace } from '@opentelemetry/api';
 dotenv.config();
+
+const otelLogger = logs.getLogger('my-nestjs-app');
 
 const { combine, timestamp, json } = winston.format;
 const { nestLike } = nestWinstonUtils.format;
@@ -72,31 +75,41 @@ export class LoggerConfig extends ConsoleLogger {
 
   log(message: any, context?: string) {
     if (this.shouldLog(context)) {
-      this.logger.info(message, { ...this.getTraceInfo(), context });
+      const meta = { ...this.getTraceInfo(), context };
+      this.logger.info(message, meta);
+      otelLogger.emit({ severityNumber: SeverityNumber.INFO, body: String(message), attributes: meta });
     }
   }
 
   error(message: any, context?: string) {
     if (this.shouldLog(context)) {
-      this.logger.error(message, { ...this.getTraceInfo(), context });
+      const meta = { ...this.getTraceInfo(), context };
+      this.logger.error(message, meta);
+      otelLogger.emit({ severityNumber: SeverityNumber.ERROR, body: String(message), attributes: meta });
     }
   }
 
   warn(message: any, context?: string) {
     if (this.shouldLog(context)) {
-      this.logger.warn(message, { ...this.getTraceInfo(), context });
+      const meta = { ...this.getTraceInfo(), context };
+      this.logger.warn(message, meta);
+      otelLogger.emit({ severityNumber: SeverityNumber.WARN, body: String(message), attributes: meta });
     }
   }
 
   debug(message: any, context?: string) {
     if (this.shouldLog(context)) {
-      this.logger.debug(message, { ...this.getTraceInfo(), context });
+      const meta = { ...this.getTraceInfo(), context };
+      this.logger.debug(message, meta);
+      otelLogger.emit({ severityNumber: SeverityNumber.DEBUG, body: String(message), attributes: meta });
     }
   }
 
   verbose(message: any, context?: string) {
     if (this.shouldLog(context)) {
-      this.logger.verbose(message, { ...this.getTraceInfo(), context });
+      const meta = { ...this.getTraceInfo(), context };
+      this.logger.verbose(message, meta);
+      otelLogger.emit({ severityNumber: SeverityNumber.TRACE, body: String(message), attributes: meta });
     }
   }
 
