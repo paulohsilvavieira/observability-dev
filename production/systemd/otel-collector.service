@@ -14,10 +14,7 @@ ExecStartPre=-/usr/bin/docker rm -f otel-collector
 ExecStart=/usr/bin/docker run --rm \
   --name otel-collector \
   --network observability-net \
-  -p 14317:4317 \
-  -p 14318:4318 \
   -p 13133:13133 \
-  -p 9464:9464 \
   -v /opt/observability/configs/otel-collector.yaml:/etc/otelcol/config.yaml:ro \
   otel/opentelemetry-collector-contrib:0.99.0 \
   --config=/etc/otelcol/config.yaml

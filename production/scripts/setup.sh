@@ -9,6 +9,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PRODUCTION_DIR="$(dirname "$SCRIPT_DIR")"
 DOCKER_NETWORK="observability-net"
 
+DOMAIN_BASE="ptechsistemas.com"
+DOMAIN_JAEGER="jaeger.${DOMAIN_BASE}"
+DOMAIN_PROMETHEUS="prometheus.${DOMAIN_BASE}"
+DOMAIN_LOKI="loki.${DOMAIN_BASE}"
+DOMAIN_OTEL="otel.${DOMAIN_BASE}"
+
 SERVICES=(otel-jaeger otel-prometheus otel-loki otel-collector otel-nginx)
 
 RED='\033[0;31m'
@@ -48,12 +54,27 @@ check_prerequisites() {
     exit 1
   fi
 
-  for cmd in docker curl systemctl openssl; do
-    if ! command -v "$cmd" &>/dev/null; then
-      log_error "Required command not found: $cmd"
-      exit 1
-    fi
-  done
+  if ! command -v apt-get &>/dev/null; then
+    log_error "This script requires a Debian/Ubuntu system (apt-get not found)"
+    exit 1
+  fi
+
+  local missing=()
+  command -v docker   &>/dev/null || missing+=(docker.io)
+  command -v certbot  &>/dev/null || missing+=(certbot)
+  command -v curl     &>/dev/null || missing+=(curl)
+  command -v openssl  &>/dev/null || missing+=(openssl)
+
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    log_info "Installing missing packages: ${missing[*]}"
+    apt-get update -qq
+    apt-get install -y "${missing[@]}"
+  fi
+
+  if ! systemctl is-active --quiet docker; then
+    log_info "Enabling and starting Docker..."
+    systemctl enable --now docker
+  fi
 
   if ! docker info &>/dev/null; then
     log_error "Docker daemon is not running"
@@ -105,19 +126,16 @@ prompt_credential() {
 generate_hashes() {
   log_info "Generating password hashes (this may take a moment)..."
 
-  # Pull httpd image once for bcrypt generation
   docker pull httpd:2.4-alpine -q &>/dev/null || true
 
   for key in collector prometheus jaeger loki; do
     local user="${SVC_USER[$key]}"
     local pass="${SVC_PASS[$key]}"
 
-    # bcrypt (for OTEL Collector and Prometheus)
     local bcrypt_entry
     bcrypt_entry=$(docker run --rm httpd:2.4-alpine htpasswd -nbB "$user" "$pass" 2>/dev/null)
     SVC_BCRYPT[$key]=$(echo "$bcrypt_entry" | cut -d: -f2)
 
-    # APR1 (for Nginx htpasswd)
     local apr1_hash
     apr1_hash=$(openssl passwd -apr1 "$pass")
     SVC_APR1[$key]="${user}:${apr1_hash}"
@@ -148,6 +166,54 @@ setup_credentials() {
   generate_hashes
 }
 
+# ─── TLS — Let's Encrypt ──────────────────────────────────────────────────────
+
+setup_tls() {
+  log_step "Obtaining TLS certificates (Let's Encrypt)"
+
+  mkdir -p "$INSTALL_DIR/certs"
+
+  local email="admin@${DOMAIN_BASE}"
+  read -rp "  Email for Let's Encrypt notifications [${email}]: " input_email
+  email="${input_email:-$email}"
+
+  log_info "Running certbot for: $DOMAIN_JAEGER $DOMAIN_PROMETHEUS $DOMAIN_LOKI $DOMAIN_OTEL"
+  log_warn "DNS A records for all four subdomains must point to this server's IP before continuing."
+  read -rp "  DNS is configured — proceed? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { log_error "Aborted. Set up DNS and re-run."; exit 1; }
+
+  certbot certonly \
+    --standalone \
+    --non-interactive \
+    --agree-tos \
+    -m "$email" \
+    -d "$DOMAIN_JAEGER" \
+    -d "$DOMAIN_PROMETHEUS" \
+    -d "$DOMAIN_LOKI" \
+    -d "$DOMAIN_OTEL"
+
+  local cert_live="/etc/letsencrypt/live/${DOMAIN_JAEGER}"
+  cp "${cert_live}/fullchain.pem" "$INSTALL_DIR/certs/fullchain.pem"
+  cp "${cert_live}/privkey.pem"   "$INSTALL_DIR/certs/privkey.pem"
+  chmod 644 "$INSTALL_DIR/certs/fullchain.pem"
+  chmod 600 "$INSTALL_DIR/certs/privkey.pem"
+
+  setup_cert_renewal "$cert_live"
+
+  log_info "TLS certificates installed at $INSTALL_DIR/certs/"
+}
+
+setup_cert_renewal() {
+  local cert_live="$1"
+
+  cat > /etc/cron.d/observability-cert-renewal << EOF
+# Weekly Let's Encrypt renewal — stops Nginx, renews, copies certs, restarts Nginx
+0 3 * * 1 root systemctl stop otel-nginx && certbot renew --quiet && cp ${cert_live}/fullchain.pem ${INSTALL_DIR}/certs/fullchain.pem && cp ${cert_live}/privkey.pem ${INSTALL_DIR}/certs/privkey.pem && chmod 600 ${INSTALL_DIR}/certs/privkey.pem && systemctl start otel-nginx
+EOF
+  chmod 644 /etc/cron.d/observability-cert-renewal
+  log_info "Cert renewal cron installed (/etc/cron.d/observability-cert-renewal)"
+}
+
 # ─── docker network ───────────────────────────────────────────────────────────
 
 setup_network() {
@@ -168,6 +234,7 @@ setup_directories() {
 
   mkdir -p \
     "$INSTALL_DIR/configs" \
+    "$INSTALL_DIR/certs" \
     "$INSTALL_DIR/data/jaeger/data" \
     "$INSTALL_DIR/data/jaeger/key" \
     "$INSTALL_DIR/data/prometheus" \
@@ -184,7 +251,6 @@ setup_directories() {
 install_configs() {
   log_step "Installing production configs"
 
-  # Static configs
   cp "$PRODUCTION_DIR/configs/prometheus.yaml" "$INSTALL_DIR/configs/prometheus.yaml"
   cp "$PRODUCTION_DIR/configs/loki.yaml"       "$INSTALL_DIR/configs/loki.yaml"
   cp "$PRODUCTION_DIR/configs/nginx.conf"      "$INSTALL_DIR/configs/nginx.conf"
@@ -272,15 +338,16 @@ basic_auth_users:
   ${SVC_USER[prometheus]}: ${SVC_BCRYPT[prometheus]}
 PROMEOF
 
-  # Nginx htpasswd — APR1, separate file per service
+  # Nginx htpasswd — APR1
   echo "${SVC_APR1[loki]}"   > "$INSTALL_DIR/configs/loki.htpasswd"
   echo "${SVC_APR1[jaeger]}" > "$INSTALL_DIR/configs/jaeger.htpasswd"
   chmod 600 "$INSTALL_DIR/configs/loki.htpasswd" \
             "$INSTALL_DIR/configs/jaeger.htpasswd"
 
   # Credentials reference (root-only)
-  local vm_ip
-  vm_ip=$(hostname -I | awk '{print $1}')
+  local b64_collector
+  b64_collector=$(echo -n "${SVC_USER[collector]}:${SVC_PASS[collector]}" | base64)
+
   cat > "$INSTALL_DIR/configs/.credentials" << CREDEOF
 # Observability Stack Credentials
 # Generated: $(date '+%Y-%m-%d %H:%M:%S')
@@ -289,24 +356,24 @@ PROMEOF
 [collector]
 OTEL_AUTH_USER=${SVC_USER[collector]}
 OTEL_AUTH_PASSWORD=${SVC_PASS[collector]}
-OTEL_EXPORTER_OTLP_ENDPOINT=http://${vm_ip}:14317
-OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=http://${vm_ip}:14318
-OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic $(echo -n "${SVC_USER[collector]}:${SVC_PASS[collector]}" | base64)
+OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_OTEL}:14317
+OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=https://${DOMAIN_OTEL}
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic ${b64_collector}
 
 [prometheus]
 USER=${SVC_USER[prometheus]}
 PASSWORD=${SVC_PASS[prometheus]}
-URL=http://${vm_ip}:9090
+URL=https://${DOMAIN_PROMETHEUS}
 
 [loki]
 USER=${SVC_USER[loki]}
 PASSWORD=${SVC_PASS[loki]}
-URL=http://${vm_ip}:3100
+URL=https://${DOMAIN_LOKI}
 
 [jaeger]
 USER=${SVC_USER[jaeger]}
 PASSWORD=${SVC_PASS[jaeger]}
-URL=http://${vm_ip}:16686
+URL=https://${DOMAIN_JAEGER}
 CREDEOF
   chmod 600 "$INSTALL_DIR/configs/.credentials"
 
@@ -368,6 +435,20 @@ start_services() {
 
 # ─── health checks ────────────────────────────────────────────────────────────
 
+wait_docker_healthy() {
+  local name="$1" container="$2" cmd="$3"
+  local retries=20
+
+  log_info "Waiting for $name..."
+  for _ in $(seq 1 $retries); do
+    docker exec "$container" sh -c "$cmd" &>/dev/null && { log_info "  $name is healthy"; return 0; }
+    sleep 3
+  done
+
+  log_error "$name did not become healthy in time"
+  return 1
+}
+
 wait_healthy() {
   local name="$1" url="$2" user="${3:-}" pass="${4:-}"
   local retries=20
@@ -389,38 +470,37 @@ wait_healthy() {
 check_health() {
   log_step "Running health checks"
 
-  wait_healthy "Jaeger"         "http://localhost:16686/"         "${SVC_USER[jaeger]}"     "${SVC_PASS[jaeger]}"
-  wait_healthy "Prometheus"     "http://localhost:9090/-/healthy" "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
-  wait_healthy "Loki"           "http://localhost:3100/ready"     "${SVC_USER[loki]}"       "${SVC_PASS[loki]}"
-  wait_healthy "OTEL Collector" "http://localhost:13133/"
+  wait_healthy        "OTEL Collector" "http://localhost:13133/"
+  wait_docker_healthy "Jaeger"         "otel-jaeger"     "wget -q --spider http://localhost:16686/"
+  wait_docker_healthy "Prometheus"     "otel-prometheus" "wget -q --spider --user=${SVC_USER[prometheus]} --password=${SVC_PASS[prometheus]} http://localhost:9090/-/healthy"
+  wait_docker_healthy "Loki"           "otel-loki"       "wget -q --spider http://localhost:3100/ready"
 }
 
 # ─── summary ──────────────────────────────────────────────────────────────────
 
 print_summary() {
-  local vm_ip
-  vm_ip=$(hostname -I | awk '{print $1}')
   local b64_collector
   b64_collector=$(echo -n "${SVC_USER[collector]}:${SVC_PASS[collector]}" | base64)
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  Observability Stack — Production Ready"
+  echo "  Observability Stack — Production Ready (TLS)"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  printf "  %-14s %-32s %s\n" "Service" "URL" "Credentials"
+  printf "  %-14s %-44s %s\n" "Service" "URL" "Credentials"
   echo "  ─────────────────────────────────────────────────────────────"
-  printf "  %-14s %-32s %s / %s\n" "Jaeger"     "http://${vm_ip}:16686" "${SVC_USER[jaeger]}"     "${SVC_PASS[jaeger]}"
-  printf "  %-14s %-32s %s / %s\n" "Prometheus" "http://${vm_ip}:9090"  "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
-  printf "  %-14s %-32s %s / %s\n" "Loki"       "http://${vm_ip}:3100"  "${SVC_USER[loki]}"       "${SVC_PASS[loki]}"
-  printf "  %-14s %-32s %s / %s\n" "OTEL gRPC"  "${vm_ip}:14317"        "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
-  printf "  %-14s %-32s %s / %s\n" "OTEL HTTP"  "http://${vm_ip}:14318" "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
+  printf "  %-14s %-44s %s / %s\n" "Jaeger"     "https://${DOMAIN_JAEGER}"         "${SVC_USER[jaeger]}"     "${SVC_PASS[jaeger]}"
+  printf "  %-14s %-44s %s / %s\n" "Prometheus" "https://${DOMAIN_PROMETHEUS}"     "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
+  printf "  %-14s %-44s %s / %s\n" "Loki"       "https://${DOMAIN_LOKI}"           "${SVC_USER[loki]}"       "${SVC_PASS[loki]}"
+  printf "  %-14s %-44s %s / %s\n" "OTEL HTTP"  "https://${DOMAIN_OTEL}"           "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
+  printf "  %-14s %-44s %s / %s\n" "OTEL gRPC"  "${DOMAIN_OTEL}:14317"             "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
   echo ""
   echo "  App environment variables (.env):"
-  echo "    OTEL_EXPORTER_OTLP_ENDPOINT=http://${vm_ip}:14317"
-  echo "    OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=http://${vm_ip}:14318"
+  echo "    OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_OTEL}:14317"
+  echo "    OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=https://${DOMAIN_OTEL}"
   echo "    OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic ${b64_collector}"
   echo ""
   echo "  All credentials saved to: $INSTALL_DIR/configs/.credentials"
+  echo "  Cert renewal cron:        /etc/cron.d/observability-cert-renewal"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "  Rotate credentials:  sudo ./scripts/setup.sh --rotate-credentials"
   echo "  Service status:      ./scripts/status.sh"
@@ -451,6 +531,7 @@ main() {
   pull_images
   install_configs
   install_systemd_units
+  setup_tls
   start_services
   check_health
   print_summary

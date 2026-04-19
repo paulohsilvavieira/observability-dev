@@ -13,7 +13,6 @@ ExecStartPre=-/usr/bin/docker rm -f otel-prometheus
 ExecStart=/usr/bin/docker run --rm \
   --name otel-prometheus \
   --network observability-net \
-  -p 9090:9090 \
   -v /opt/observability/configs/prometheus.yaml:/etc/prometheus/prometheus.yaml:ro \
   -v /opt/observability/configs/prometheus-web.yaml:/etc/prometheus/web.yaml:ro \
   -v /opt/observability/data/prometheus:/prometheus \

@@ -1,8 +1,8 @@
 [Unit]
-Description=Observability - Nginx (Auth Proxy for Loki and Jaeger)
-After=docker.service network-online.target otel-loki.service otel-jaeger.service
+Description=Observability - Nginx (TLS Termination + Auth Proxy)
+After=docker.service network-online.target otel-loki.service otel-jaeger.service otel-prometheus.service
 Requires=docker.service
-Wants=otel-loki.service otel-jaeger.service
+Wants=otel-loki.service otel-jaeger.service otel-prometheus.service
 
 [Service]
 Restart=always
@@ -14,11 +14,13 @@ ExecStartPre=-/usr/bin/docker rm -f otel-nginx
 ExecStart=/usr/bin/docker run --rm \
   --name otel-nginx \
   --network observability-net \
-  -p 3100:3100 \
-  -p 16686:16686 \
+  -p 80:80 \
+  -p 443:443 \
+  -p 14317:14317 \
   -v /opt/observability/configs/nginx.conf:/etc/nginx/nginx.conf:ro \
   -v /opt/observability/configs/loki.htpasswd:/etc/nginx/loki.htpasswd:ro \
   -v /opt/observability/configs/jaeger.htpasswd:/etc/nginx/jaeger.htpasswd:ro \
+  -v /opt/observability/certs:/etc/nginx/certs:ro \
   nginx:1.27-alpine
 ExecStop=/usr/bin/docker stop otel-nginx
 

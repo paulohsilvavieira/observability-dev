@@ -13,8 +13,6 @@ ExecStartPre=-/usr/bin/docker rm -f otel-loki
 ExecStart=/usr/bin/docker run --rm \
   --name otel-loki \
   --network observability-net \
-  -p 3100:3100 \
-  -p 9096:9096 \
   -v /opt/observability/configs/loki.yaml:/etc/loki/config.yaml:ro \
   -v /opt/observability/data/loki:/loki \
   grafana/loki:3.4.2 \

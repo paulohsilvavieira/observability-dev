@@ -43,7 +43,11 @@ done
 log_info "Removing Docker network..."
 docker network rm "$DOCKER_NETWORK" 2>/dev/null || log_warn "Network already removed"
 
-log_info "Removing configs..."
+log_info "Removing configs and certs..."
 rm -rf "$INSTALL_DIR/configs"
+rm -rf "$INSTALL_DIR/certs"
+
+log_info "Removing cert renewal cron..."
+rm -f /etc/cron.d/observability-cert-renewal
 
 log_info "Uninstall complete. Data preserved at $INSTALL_DIR/data/"
