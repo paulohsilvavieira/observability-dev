@@ -51,7 +51,7 @@ done
 echo ""
 echo "  Health checks (internal):"
 printf "  %-22s %s\n" "OTEL Collector"  "$(check_http http://localhost:13133/)"
-printf "  %-22s %s\n" "Jaeger"          "$(check_http http://localhost:16686/)"
+printf "  %-22s %s\n" "Jaeger"          "$(check_http http://localhost:14269/)"
 printf "  %-22s %s\n" "Prometheus"      "$(check_http http://localhost:9090/-/healthy "$(get_cred prometheus USER)" "$(get_cred prometheus PASSWORD)")"
 printf "  %-22s %s\n" "Loki"            "$(check_http http://localhost:3100/ready)"
 

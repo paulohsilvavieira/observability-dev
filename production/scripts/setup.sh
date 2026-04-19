@@ -243,6 +243,7 @@ setup_directories() {
     "$INSTALL_DIR/data/loki/compactor"
 
   chown -R 10001:10001 "$INSTALL_DIR/data/loki"
+  chown -R 10001:10001 "$INSTALL_DIR/data/jaeger"
   log_info "Directories ready at $INSTALL_DIR"
 }
 
@@ -457,7 +458,7 @@ check_health() {
   log_step "Running health checks"
 
   wait_healthy "OTEL Collector" "http://localhost:13133/"
-  wait_healthy "Jaeger"         "http://localhost:16686/"
+  wait_healthy "Jaeger"         "http://localhost:14269/"
   wait_healthy "Prometheus"     "http://localhost:9090/-/healthy" "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
   wait_healthy "Loki"           "http://localhost:3100/ready"
 }
