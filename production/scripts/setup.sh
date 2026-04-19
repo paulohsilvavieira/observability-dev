@@ -435,20 +435,6 @@ start_services() {
 
 # ─── health checks ────────────────────────────────────────────────────────────
 
-wait_docker_healthy() {
-  local name="$1" container="$2" cmd="$3"
-  local retries=20
-
-  log_info "Waiting for $name..."
-  for _ in $(seq 1 $retries); do
-    docker exec "$container" sh -c "$cmd" &>/dev/null && { log_info "  $name is healthy"; return 0; }
-    sleep 3
-  done
-
-  log_error "$name did not become healthy in time"
-  return 1
-}
-
 wait_healthy() {
   local name="$1" url="$2" user="${3:-}" pass="${4:-}"
   local retries=20
@@ -470,10 +456,10 @@ wait_healthy() {
 check_health() {
   log_step "Running health checks"
 
-  wait_healthy        "OTEL Collector" "http://localhost:13133/"
-  wait_docker_healthy "Jaeger"         "otel-jaeger"     "wget -q --spider http://localhost:16686/"
-  wait_docker_healthy "Prometheus"     "otel-prometheus" "wget -q --spider --user=${SVC_USER[prometheus]} --password=${SVC_PASS[prometheus]} http://localhost:9090/-/healthy"
-  wait_docker_healthy "Loki"           "otel-loki"       "wget -q --spider http://localhost:3100/ready"
+  wait_healthy "OTEL Collector" "http://localhost:13133/"
+  wait_healthy "Jaeger"         "http://localhost:16686/"
+  wait_healthy "Prometheus"     "http://localhost:9090/-/healthy" "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
+  wait_healthy "Loki"           "http://localhost:3100/ready"
 }
 
 # ─── summary ──────────────────────────────────────────────────────────────────

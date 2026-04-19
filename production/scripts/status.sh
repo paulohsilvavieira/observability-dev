@@ -21,25 +21,18 @@ get_cred() {
   fi
 }
 
-check_docker() {
-  local container="$1" cmd="$2"
-  if docker exec "$container" sh -c "$cmd" &>/dev/null 2>&1; then
-    echo -e "${GREEN}healthy${NC}"
-  else
-    echo -e "${RED}unreachable${NC}"
-  fi
+check_http() {
+  local url="$1" user="${2:-}" pass="${3:-}"
+  local args=(-sf --max-time 3)
+  [[ -n "$user" ]] && args+=(-u "${user}:${pass}")
+  curl "${args[@]}" "$url" &>/dev/null && echo -e "${GREEN}healthy${NC}" || echo -e "${RED}unreachable${NC}"
 }
 
 check_https() {
   local url="$1" user="${2:-}" pass="${3:-}"
   local args=(-sf -k --max-time 3)
   [[ -n "$user" ]] && args+=(-u "${user}:${pass}")
-
-  if curl "${args[@]}" "$url" &>/dev/null; then
-    echo -e "${GREEN}healthy${NC}"
-  else
-    echo -e "${RED}unreachable${NC}"
-  fi
+  curl "${args[@]}" "$url" &>/dev/null && echo -e "${GREEN}healthy${NC}" || echo -e "${RED}unreachable${NC}"
 }
 
 echo ""
@@ -57,10 +50,10 @@ done
 
 echo ""
 echo "  Health checks (internal):"
-printf "  %-22s %s\n" "OTEL Collector"  "$(check_https http://localhost:13133/)"
-printf "  %-22s %s\n" "Jaeger"          "$(check_docker otel-jaeger     'wget -q --spider http://localhost:16686/')"
-printf "  %-22s %s\n" "Prometheus"      "$(check_docker otel-prometheus "wget -q --spider --user=$(get_cred prometheus USER) --password=$(get_cred prometheus PASSWORD) http://localhost:9090/-/healthy")"
-printf "  %-22s %s\n" "Loki"            "$(check_docker otel-loki       'wget -q --spider http://localhost:3100/ready')"
+printf "  %-22s %s\n" "OTEL Collector"  "$(check_http http://localhost:13133/)"
+printf "  %-22s %s\n" "Jaeger"          "$(check_http http://localhost:16686/)"
+printf "  %-22s %s\n" "Prometheus"      "$(check_http http://localhost:9090/-/healthy "$(get_cred prometheus USER)" "$(get_cred prometheus PASSWORD)")"
+printf "  %-22s %s\n" "Loki"            "$(check_http http://localhost:3100/ready)"
 
 echo ""
 echo "  Health checks (HTTPS):"
