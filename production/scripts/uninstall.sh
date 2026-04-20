@@ -5,7 +5,7 @@ SYSTEMD_DIR="/etc/systemd/system"
 INSTALL_DIR="/opt/observability"
 DOCKER_NETWORK="observability-net"
 
-SERVICES=(otel-collector otel-loki otel-prometheus otel-jaeger)
+SERVICES=(otel-collector otel-alertmanager otel-loki otel-prometheus otel-jaeger)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -36,7 +36,7 @@ done
 systemctl daemon-reload
 
 log_info "Removing Docker containers (if still running)..."
-for container in otel-collector otel-loki otel-prometheus otel-jaeger; do
+for container in otel-collector otel-alertmanager otel-loki otel-prometheus otel-jaeger; do
   docker rm -f "$container" 2>/dev/null || true
 done
 

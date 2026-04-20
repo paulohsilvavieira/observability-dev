@@ -14,8 +14,10 @@ DOMAIN_JAEGER="jaeger.${DOMAIN_BASE}"
 DOMAIN_PROMETHEUS="prometheus.${DOMAIN_BASE}"
 DOMAIN_LOKI="loki.${DOMAIN_BASE}"
 DOMAIN_OTEL="otel.${DOMAIN_BASE}"
+DOMAIN_ALERTMANAGER="alertmanager.${DOMAIN_BASE}"
+DOMAIN_GRPC="grpc.${DOMAIN_BASE}"
 
-SERVICES=(otel-jaeger otel-prometheus otel-loki otel-collector otel-nginx)
+SERVICES=(otel-jaeger otel-prometheus otel-loki otel-alertmanager otel-collector otel-nginx)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -24,6 +26,7 @@ CYAN='\033[0;36m'
 NC='\033[0m'
 
 ROTATE_CREDENTIALS=false
+ADD_ALERTMANAGER=false
 
 # Per-service credentials
 declare -A SVC_USER SVC_PASS SVC_BCRYPT SVC_APR1
@@ -33,6 +36,7 @@ declare -A SVC_USER SVC_PASS SVC_BCRYPT SVC_APR1
 for arg in "$@"; do
   case $arg in
     --rotate-credentials) ROTATE_CREDENTIALS=true ;;
+    --add-alertmanager)   ADD_ALERTMANAGER=true ;;
     *) echo -e "${RED}[ERROR]${NC} Unknown argument: $arg"; exit 1 ;;
   esac
 done
@@ -128,7 +132,7 @@ generate_hashes() {
 
   docker pull httpd:2.4-alpine -q &>/dev/null || true
 
-  for key in collector prometheus jaeger loki; do
+  for key in collector prometheus jaeger loki alertmanager; do
     local user="${SVC_USER[$key]}"
     local pass="${SVC_PASS[$key]}"
 
@@ -158,10 +162,11 @@ setup_credentials() {
   echo "  Press ENTER to accept the default username."
   echo ""
 
-  prompt_credential "OTEL Collector  (apps send telemetry here)"  "collector"  "otel-collector"
-  prompt_credential "Prometheus       (metrics query)"             "prometheus" "otel-prometheus"
-  prompt_credential "Loki             (log query)"                 "loki"       "otel-loki"
-  prompt_credential "Jaeger           (trace UI)"                  "jaeger"     "otel-jaeger"
+  prompt_credential "OTEL Collector  (apps send telemetry here)"  "collector"    "otel-collector"
+  prompt_credential "Prometheus       (metrics query)"             "prometheus"   "otel-prometheus"
+  prompt_credential "Loki             (log query)"                 "loki"         "otel-loki"
+  prompt_credential "Jaeger           (trace UI)"                  "jaeger"       "otel-jaeger"
+  prompt_credential "Alertmanager     (alert routing UI)"          "alertmanager" "otel-alertmanager"
 
   generate_hashes
 }
@@ -177,8 +182,8 @@ setup_tls() {
   read -rp "  Email for Let's Encrypt notifications [${email}]: " input_email
   email="${input_email:-$email}"
 
-  log_info "Running certbot for: $DOMAIN_JAEGER $DOMAIN_PROMETHEUS $DOMAIN_LOKI $DOMAIN_OTEL"
-  log_warn "DNS A records for all four subdomains must point to this server's IP before continuing."
+  log_info "Running certbot for: $DOMAIN_JAEGER $DOMAIN_PROMETHEUS $DOMAIN_LOKI $DOMAIN_OTEL $DOMAIN_ALERTMANAGER $DOMAIN_GRPC"
+  log_warn "DNS A records for all six subdomains must point to this server's IP before continuing."
   read -rp "  DNS is configured — proceed? [y/N] " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { log_error "Aborted. Set up DNS and re-run."; exit 1; }
 
@@ -190,7 +195,9 @@ setup_tls() {
     -d "$DOMAIN_JAEGER" \
     -d "$DOMAIN_PROMETHEUS" \
     -d "$DOMAIN_LOKI" \
-    -d "$DOMAIN_OTEL"
+    -d "$DOMAIN_OTEL" \
+    -d "$DOMAIN_ALERTMANAGER" \
+    -d "$DOMAIN_GRPC"
 
   local cert_live="/etc/letsencrypt/live/${DOMAIN_JAEGER}"
   cp "${cert_live}/fullchain.pem" "$INSTALL_DIR/certs/fullchain.pem"
@@ -240,8 +247,11 @@ setup_directories() {
     "$INSTALL_DIR/data/prometheus" \
     "$INSTALL_DIR/data/loki/chunks" \
     "$INSTALL_DIR/data/loki/rules" \
-    "$INSTALL_DIR/data/loki/compactor"
+    "$INSTALL_DIR/data/loki/compactor" \
+    "$INSTALL_DIR/data/alertmanager"
 
+  chown -R 65534:65534 "$INSTALL_DIR/data/prometheus"
+  chown -R 65534:65534 "$INSTALL_DIR/data/alertmanager"
   chown -R 10001:10001 "$INSTALL_DIR/data/loki"
   chown -R 10001:10001 "$INSTALL_DIR/data/jaeger"
   log_info "Directories ready at $INSTALL_DIR"
@@ -252,12 +262,14 @@ setup_directories() {
 install_configs() {
   log_step "Installing production configs"
 
-  cp "$PRODUCTION_DIR/configs/prometheus.yaml" "$INSTALL_DIR/configs/prometheus.yaml"
-  cp "$PRODUCTION_DIR/configs/loki.yaml"       "$INSTALL_DIR/configs/loki.yaml"
-  cp "$PRODUCTION_DIR/configs/nginx.conf"      "$INSTALL_DIR/configs/nginx.conf"
+  cp "$PRODUCTION_DIR/configs/prometheus.yaml"    "$INSTALL_DIR/configs/prometheus.yaml"
+  cp "$PRODUCTION_DIR/configs/loki.yaml"          "$INSTALL_DIR/configs/loki.yaml"
+  cp "$PRODUCTION_DIR/configs/nginx.conf"         "$INSTALL_DIR/configs/nginx.conf"
+  cp "$PRODUCTION_DIR/configs/alertmanager.yaml"  "$INSTALL_DIR/configs/alertmanager.yaml"
   chmod 644 "$INSTALL_DIR/configs/prometheus.yaml" \
             "$INSTALL_DIR/configs/loki.yaml" \
-            "$INSTALL_DIR/configs/nginx.conf"
+            "$INSTALL_DIR/configs/nginx.conf" \
+            "$INSTALL_DIR/configs/alertmanager.yaml"
 
   # OTEL Collector — bcrypt inline
   cat > "$INSTALL_DIR/configs/otel-collector.yaml" << OTELEOF
@@ -340,10 +352,12 @@ basic_auth_users:
 PROMEOF
 
   # Nginx htpasswd — APR1
-  echo "${SVC_APR1[loki]}"   > "$INSTALL_DIR/configs/loki.htpasswd"
-  echo "${SVC_APR1[jaeger]}" > "$INSTALL_DIR/configs/jaeger.htpasswd"
-  chmod 600 "$INSTALL_DIR/configs/loki.htpasswd" \
-            "$INSTALL_DIR/configs/jaeger.htpasswd"
+  echo "${SVC_APR1[loki]}"         > "$INSTALL_DIR/configs/loki.htpasswd"
+  echo "${SVC_APR1[jaeger]}"       > "$INSTALL_DIR/configs/jaeger.htpasswd"
+  echo "${SVC_APR1[alertmanager]}" > "$INSTALL_DIR/configs/alertmanager.htpasswd"
+  chmod 644 "$INSTALL_DIR/configs/loki.htpasswd" \
+            "$INSTALL_DIR/configs/jaeger.htpasswd" \
+            "$INSTALL_DIR/configs/alertmanager.htpasswd"
 
   # Credentials reference (root-only)
   local b64_collector
@@ -357,7 +371,7 @@ PROMEOF
 [collector]
 OTEL_AUTH_USER=${SVC_USER[collector]}
 OTEL_AUTH_PASSWORD=${SVC_PASS[collector]}
-OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_OTEL}:14317
+OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_GRPC}
 OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=https://${DOMAIN_OTEL}
 OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic ${b64_collector}
 
@@ -375,6 +389,11 @@ URL=https://${DOMAIN_LOKI}
 USER=${SVC_USER[jaeger]}
 PASSWORD=${SVC_PASS[jaeger]}
 URL=https://${DOMAIN_JAEGER}
+
+[alertmanager]
+USER=${SVC_USER[alertmanager]}
+PASSWORD=${SVC_PASS[alertmanager]}
+URL=https://${DOMAIN_ALERTMANAGER}
 CREDEOF
   chmod 600 "$INSTALL_DIR/configs/.credentials"
 
@@ -403,6 +422,7 @@ pull_images() {
 
   docker pull jaegertracing/all-in-one:1.57
   docker pull prom/prometheus:v2.51.2
+  docker pull prom/alertmanager:v0.27.0
   docker pull grafana/loki:3.4.2
   docker pull otel/opentelemetry-collector-contrib:0.99.0
   docker pull nginx:1.27-alpine
@@ -417,12 +437,12 @@ start_services() {
 
   if [[ "$ROTATE_CREDENTIALS" == "true" ]]; then
     log_info "Restarting services to apply new credentials..."
-    systemctl restart otel-collector otel-prometheus otel-nginx
+    systemctl restart otel-collector otel-prometheus otel-alertmanager otel-nginx
     log_info "Services restarted"
     return
   fi
 
-  for service in otel-jaeger otel-prometheus otel-loki; do
+  for service in otel-jaeger otel-prometheus otel-loki otel-alertmanager; do
     systemctl enable --now "$service"
     log_info "  Started: $service"
   done
@@ -461,6 +481,7 @@ check_health() {
   wait_healthy "Jaeger"         "http://localhost:14269/"
   wait_healthy "Prometheus"     "http://localhost:9090/-/healthy" "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
   wait_healthy "Loki"           "http://localhost:3100/ready"
+  wait_healthy "Alertmanager"   "http://localhost:9093/-/healthy"
 }
 
 # ─── summary ──────────────────────────────────────────────────────────────────
@@ -478,20 +499,133 @@ print_summary() {
   printf "  %-14s %-44s %s / %s\n" "Jaeger"     "https://${DOMAIN_JAEGER}"         "${SVC_USER[jaeger]}"     "${SVC_PASS[jaeger]}"
   printf "  %-14s %-44s %s / %s\n" "Prometheus" "https://${DOMAIN_PROMETHEUS}"     "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
   printf "  %-14s %-44s %s / %s\n" "Loki"       "https://${DOMAIN_LOKI}"           "${SVC_USER[loki]}"       "${SVC_PASS[loki]}"
+  printf "  %-14s %-44s %s / %s\n" "Alertmanager" "https://${DOMAIN_ALERTMANAGER}"   "${SVC_USER[alertmanager]}" "${SVC_PASS[alertmanager]}"
   printf "  %-14s %-44s %s / %s\n" "OTEL HTTP"  "https://${DOMAIN_OTEL}"           "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
-  printf "  %-14s %-44s %s / %s\n" "OTEL gRPC"  "${DOMAIN_OTEL}:14317"             "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
+  printf "  %-14s %-44s %s / %s\n" "OTEL gRPC"  "https://${DOMAIN_GRPC}"       "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
   echo ""
   echo "  App environment variables (.env):"
-  echo "    OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_OTEL}:14317"
+  echo "    OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_GRPC}"
   echo "    OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=https://${DOMAIN_OTEL}"
   echo "    OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic ${b64_collector}"
   echo ""
   echo "  All credentials saved to: $INSTALL_DIR/configs/.credentials"
   echo "  Cert renewal cron:        /etc/cron.d/observability-cert-renewal"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Add alertmanager:    sudo ./scripts/setup.sh --add-alertmanager"
   echo "  Rotate credentials:  sudo ./scripts/setup.sh --rotate-credentials"
   echo "  Service status:      ./scripts/status.sh"
   echo "  Logs:                journalctl -u otel-collector -f"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
+# ─── add alertmanager to existing installation ────────────────────────────────
+
+add_alertmanager_to_existing() {
+  log_step "Adding Alertmanager to existing installation"
+
+  # Valida que a instalação base existe
+  if [[ ! -f "$INSTALL_DIR/configs/.credentials" ]]; then
+    log_error "No existing installation found at $INSTALL_DIR. Run setup.sh without --add-alertmanager first."
+    exit 1
+  fi
+
+  if systemctl is-active --quiet otel-alertmanager; then
+    log_warn "otel-alertmanager is already running. Use --rotate-credentials to update credentials."
+    exit 0
+  fi
+
+  # Lê credenciais existentes para não reprompt de outros serviços
+  log_info "Existing installation detected at $INSTALL_DIR"
+
+  # Coleta apenas credenciais do alertmanager
+  echo ""
+  echo "  Configure credentials for Alertmanager."
+  echo ""
+  prompt_credential "Alertmanager (alert routing UI)" "alertmanager" "otel-alertmanager"
+
+  # Gera hashes apenas para o alertmanager
+  log_info "Generating password hashes..."
+  docker pull httpd:2.4-alpine -q &>/dev/null || true
+  local bcrypt_entry
+  bcrypt_entry=$(docker run --rm httpd:2.4-alpine htpasswd -nbB "${SVC_USER[alertmanager]}" "${SVC_PASS[alertmanager]}" 2>/dev/null)
+  SVC_BCRYPT[alertmanager]=$(echo "$bcrypt_entry" | cut -d: -f2)
+  local apr1_hash
+  apr1_hash=$(openssl passwd -apr1 "${SVC_PASS[alertmanager]}")
+  SVC_APR1[alertmanager]="${SVC_USER[alertmanager]}:${apr1_hash}"
+
+  # Cria diretório de dados
+  mkdir -p "$INSTALL_DIR/data/alertmanager"
+  chown -R 65534:65534 "$INSTALL_DIR/data/alertmanager"
+
+  # Instala configs
+  cp "$PRODUCTION_DIR/configs/alertmanager.yaml" "$INSTALL_DIR/configs/alertmanager.yaml"
+  chmod 644 "$INSTALL_DIR/configs/alertmanager.yaml"
+  echo "${SVC_APR1[alertmanager]}" > "$INSTALL_DIR/configs/alertmanager.htpasswd"
+  chmod 644 "$INSTALL_DIR/configs/alertmanager.htpasswd"
+
+  # Adiciona credenciais ao arquivo existente (se ainda não estiver lá)
+  if ! grep -q '^\[alertmanager\]' "$INSTALL_DIR/configs/.credentials" 2>/dev/null; then
+    cat >> "$INSTALL_DIR/configs/.credentials" << CREDEOF
+
+[alertmanager]
+USER=${SVC_USER[alertmanager]}
+PASSWORD=${SVC_PASS[alertmanager]}
+URL=https://${DOMAIN_ALERTMANAGER}
+CREDEOF
+    log_info "Credentials appended to $INSTALL_DIR/configs/.credentials"
+  fi
+
+  # Expande o certificado Let's Encrypt para incluir o novo subdomínio
+  log_info "Expanding TLS certificate to include $DOMAIN_ALERTMANAGER..."
+  local cert_live="/etc/letsencrypt/live/${DOMAIN_JAEGER}"
+  if [[ -d "$cert_live" ]]; then
+    systemctl stop otel-nginx 2>/dev/null || true
+    certbot certonly \
+      --standalone \
+      --non-interactive \
+      --agree-tos \
+      --expand \
+      -d "$DOMAIN_JAEGER" \
+      -d "$DOMAIN_PROMETHEUS" \
+      -d "$DOMAIN_LOKI" \
+      -d "$DOMAIN_OTEL" \
+      -d "$DOMAIN_ALERTMANAGER" \
+      -d "$DOMAIN_GRPC"
+    cp "${cert_live}/fullchain.pem" "$INSTALL_DIR/certs/fullchain.pem"
+    cp "${cert_live}/privkey.pem"   "$INSTALL_DIR/certs/privkey.pem"
+    chmod 644 "$INSTALL_DIR/certs/fullchain.pem"
+    chmod 600 "$INSTALL_DIR/certs/privkey.pem"
+  else
+    log_warn "Let's Encrypt cert not found — skipping cert expansion. Add $DOMAIN_ALERTMANAGER manually if needed."
+  fi
+
+  # Atualiza nginx.conf e htpasswd no lugar
+  cp "$PRODUCTION_DIR/configs/nginx.conf" "$INSTALL_DIR/configs/nginx.conf"
+
+  # Pull e instala systemd unit
+  docker pull prom/alertmanager:v0.27.0
+  cp "$PRODUCTION_DIR/systemd/otel-alertmanager.service" "$SYSTEMD_DIR/otel-alertmanager.service"
+  chmod 644 "$SYSTEMD_DIR/otel-alertmanager.service"
+  systemctl daemon-reload
+
+  # Inicia serviços
+  systemctl enable --now otel-alertmanager
+  log_info "  Started: otel-alertmanager"
+
+  systemctl restart otel-nginx
+  log_info "  Restarted: otel-nginx (new alertmanager server block active)"
+
+  # Health check
+  wait_healthy "Alertmanager" "http://localhost:9093/-/healthy"
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Alertmanager added successfully"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  printf "  %-14s %-44s %s / %s\n" "Alertmanager" "https://${DOMAIN_ALERTMANAGER}" "${SVC_USER[alertmanager]}" "${SVC_PASS[alertmanager]}"
+  echo ""
+  echo "  Grafana datasource URL (Grafana no host): http://localhost:9093"
+  echo "  Grafana datasource URL (Grafana em Docker na mesma rede): http://otel-alertmanager:9093"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
@@ -503,6 +637,12 @@ main() {
   echo ""
 
   check_prerequisites
+
+  if [[ "$ADD_ALERTMANAGER" == "true" ]]; then
+    add_alertmanager_to_existing
+    return
+  fi
+
   setup_credentials
 
   if [[ "$ROTATE_CREDENTIALS" == "true" ]]; then

@@ -1,52 +1,95 @@
+# Autenticação desabilitada no Loki — ela é feita pelo Nginx (auth_basic).
+# Se habilitada, cada requisição precisaria de um header X-Scope-OrgID.
 auth_enabled: false
 
 server:
   http_listen_port: 3100
+  # Porta gRPC interna — usada para comunicação entre componentes do Loki
+  # em modo distribuído. Mantida aqui por convenção, não é exposta externamente.
   grpc_listen_port: 9096
+  # Apenas warnings e erros — evita spam de logs em produção.
   log_level: warn
 
 common:
   ring:
+    # Endereço local — adequado para modo single instance (um único processo Loki).
+    # Em cluster, cada instância informaria seu IP externo.
     instance_addr: 127.0.0.1
     kvstore:
+      # Metadados do anel de hash armazenados em memória.
+      # Funciona apenas para single instance — em cluster usaria etcd ou consul.
       store: inmemory
+  # Sem replicação — os dados existem em apenas uma instância.
   replication_factor: 1
+  # Prefixo base para todos os caminhos de dados no filesystem.
   path_prefix: /loki
 
+# ─── Schema ───────────────────────────────────────────────────────────────────
 schema_config:
   configs:
+      # Data de início de vigência deste schema. Novos schemas são adicionados
+      # abaixo com uma data futura sem remover o anterior (migração incremental).
     - from: 2024-01-01
+      # tsdb é o backend de índice mais eficiente do Loki — substitui o boltdb-shipper.
       store: tsdb
+      # Armazena chunks (blocos de logs) no filesystem local.
+      # Alternativas para cloud: s3, gcs, azure.
       object_store: filesystem
+      # v13 é o schema mais recente — suporta structured metadata e melhor compressão.
       schema: v13
       index:
         prefix: index_
+        # O índice é dividido em arquivos por período de 24h.
+        # Facilita a limpeza de dados antigos pelo compactor.
         period: 24h
 
+# ─── Storage ──────────────────────────────────────────────────────────────────
 storage_config:
   filesystem:
+    # Diretório onde os chunks (blocos comprimidos de logs) são gravados.
     directory: /loki/chunks
 
+# ─── Limits ───────────────────────────────────────────────────────────────────
 limits_config:
+  # Retém logs por 30 dias. A limpeza é feita automaticamente pelo compactor.
   retention_period: 30d
+  # Taxa máxima de ingestão por tenant: 16 MB/s contínuo.
   ingestion_rate_mb: 16
+  # Burst permitido acima da taxa: até 32 MB em um único intervalo de rate limit.
   ingestion_burst_size_mb: 32
+  # Limite de séries únicas retornadas por uma query (evita queries que explodem memória).
   max_query_series: 10000
+  # Limite de entradas (linhas de log) retornadas por uma única query.
   max_entries_limit_per_query: 10000
 
+# ─── Compactor ────────────────────────────────────────────────────────────────
 compactor:
   working_directory: /loki/compactor
+  # Habilita a remoção automática de dados mais antigos que retention_period.
+  # Sem isso, os dados nunca são apagados mesmo com retention_period configurado.
   retention_enabled: true
+  # Persiste as requisições de deleção no filesystem (vs. memória).
   delete_request_store: filesystem
 
+# ─── Query Cache ──────────────────────────────────────────────────────────────
 query_range:
   results_cache:
     cache:
+      # Cache embutido no processo — não precisa de Redis ou Memcached externo.
+      # Armazena resultados de queries recentes para acelerar consultas repetidas.
       embedded_cache:
         enabled: true
+        # Limite máximo de memória para o cache de queries.
         max_size_mb: 256
 
+# ─── Ingester ─────────────────────────────────────────────────────────────────
 ingester:
+  # Fecha um chunk após 5 minutos sem receber novos logs para aquele stream.
+  # Chunks fechados são enviados para armazenamento permanente (chunks/).
   chunk_idle_period: 5m
+  # Força o fechamento e flush do chunk após 1h, independente de atividade.
+  # Evita chunks muito grandes que demoram para ser escritos.
   max_chunk_age: 1h
+  # Mantém o chunk em memória por mais 30s após o flush antes de descartar.
+  # Garante que queries recentes ainda encontrem os dados durante a transição.
   chunk_retain_period: 30s

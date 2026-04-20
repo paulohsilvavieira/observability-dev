@@ -1,34 +1,62 @@
+# ─── Receivers ────────────────────────────────────────────────────────────────
+# O receptor OTLP aceita telemetria (traces, logs e métricas) das aplicações.
+# Duas portas: gRPC (:4317) é mais eficiente para alto volume;
+# HTTP (:4318) é mais fácil de usar com clientes simples (curl, browsers).
 receivers:
   otlp:
     protocols:
       grpc:
-        endpoint: "0.0.0.0:4317" 
+        # Escuta em todas as interfaces — aceitável em dev (rede Docker isolada)
+        endpoint: "0.0.0.0:4317"
       http:
         endpoint: "0.0.0.0:4318"
+
+# ─── Processors ───────────────────────────────────────────────────────────────
 processors:
   batch:
-    timeout: 100ms   # em vez de 5s
+    # DEV: envia após 100ms mesmo com apenas 1 mensagem para ver dados imediatamente.
+    # Em produção esses valores são 10s / 1000 msgs para reduzir overhead de rede.
+    timeout: 100ms
     send_batch_size: 1
+
+# ─── Exporters ────────────────────────────────────────────────────────────────
 exporters:
+  # Imprime telemetria no stdout do collector — útil para depuração em dev.
+  # Removido em produção para não poluir os logs.
   debug: {}
+
+  # Envia traces para o Jaeger via gRPC (protocolo OTLP).
   otlp:
     endpoint: jaeger:4317
     tls:
+      # TLS desabilitado — aceitável em dev porque a comunicação é local (rede Docker).
       insecure: true
+
+  # Expõe métricas em formato Prometheus na porta 9464.
+  # O Prometheus faz scrape nesse endpoint a cada 15s (ver prometheus.yaml).
   prometheus:
     endpoint: "0.0.0.0:9464"
+
+  # Envia logs para o Loki via HTTP usando o protocolo OTLP nativo do Loki.
   otlphttp:
     endpoint: http://loki:3100/otlp
 
+# ─── Service ──────────────────────────────────────────────────────────────────
+# Define os três pipelines independentes: cada sinal segue seu próprio caminho.
 service:
   pipelines:
+    # Traces: recebe → agrupa em batch → envia ao Jaeger + imprime no stdout
     traces:
       receivers: [otlp]
       processors: [batch]
       exporters: [otlp, debug]
+
+    # Logs: recebe → envia ao Loki + imprime no stdout (sem batch em dev)
     logs:
       receivers: [otlp]
       exporters: [otlphttp, debug]
+
+    # Métricas: recebe → expõe endpoint Prometheus + imprime no stdout
     metrics:
       receivers: [otlp]
       exporters: [prometheus, debug]

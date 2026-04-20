@@ -17,12 +17,14 @@ Production setup → see `production/CLAUDE.md`
 
 ```
 NestJS (OTLP gRPC → :14317)  ─┐
-                               ├─→  OTEL Collector ─→ Jaeger  (traces)
-Rails  (OTLP HTTP → :14318)  ─┘                    ─→ Loki    (logs)
-                                                    ─→ Prometheus (metrics)
-                                                    ─→ Tempo   (traces, alt)
+                               ├─→  OTEL Collector ─→ Jaeger        (traces)
+Rails  (OTLP HTTP → :14318)  ─┘                    ─→ Loki          (logs)
+                                                    ─→ Prometheus    (metrics)
+                                                    ─→ Tempo         (traces, alt)
                                                     ↓
                                                  Grafana (visualizes all)
+
+Prometheus ─→ Alertmanager (alert routing → email/Slack/webhook)
 ```
 
 ## Key ports

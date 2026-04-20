@@ -1,13 +1,33 @@
+# ─── Alerting ─────────────────────────────────────────────────────────────────
+# Endereço do Alertmanager para onde o Prometheus envia os alertas disparados.
+# A comunicação é interna via rede Docker (sem TLS).
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ['otel-alertmanager:9093']
+
 global:
+  # Com que frequência o Prometheus coleta métricas de cada alvo.
   scrape_interval: 15s
+  # Com que frequência avalia as regras de alertas (alerting rules).
   evaluation_interval: 15s
+  # Labels adicionadas a todas as métricas coletadas por este Prometheus.
+  # Permite identificar a origem ao federar múltiplos Prometheuses ou no Grafana.
   external_labels:
     environment: production
 
 scrape_configs:
+  # Job responsável por coletar as métricas expostas pelo OTEL Collector.
+  # O collector expõe um endpoint Prometheus em :9464 com todas as métricas
+  # recebidas das aplicações (NestJS, Rails) mais as métricas internas do collector.
   - job_name: otel-collector
     static_configs:
       - targets: ["otel-collector:9464"]
+
+    # Filtra métricas após a coleta, antes de armazenar no TSDB.
+    # Mantém apenas métricas cujo nome começa com otel_, up ou scrape_.
+    # Isso descarta métricas internas do collector que não são relevantes para
+    # monitorar as aplicações, reduzindo cardinalidade e uso de disco.
     metric_relabel_configs:
       - source_labels: [__name__]
         regex: "^(otel_|up|scrape_).*"

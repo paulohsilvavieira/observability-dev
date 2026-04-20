@@ -1,70 +1,118 @@
+# ─── Extensions ───────────────────────────────────────────────────────────────
+# Extensions adicionam funcionalidades ao collector sem fazer parte dos pipelines.
 extensions:
+  # Endpoint de health check usado pelo systemd e pelo script status.sh.
+  # Exposto na porta 13133 diretamente no host (sem passar pelo Nginx).
   health_check:
     endpoint: 0.0.0.0:13133
+
+  # zPages fornece páginas de diagnóstico internas (traces em andamento, pipelines).
+  # Usado apenas para depuração — não é exposto externamente.
   zpages:
     endpoint: 0.0.0.0:55679
+
+  # Autenticação Basic Auth para os receptores gRPC e HTTP.
+  # O hash bcrypt abaixo é gerado pelo setup.sh e injetado neste arquivo.
+  # Formato: usuario:$2y$custo$salt+hash (bcrypt compatível com htpasswd)
   basicauth/otlp:
     htpasswd:
       inline: |
         otel:$2y$05$l8tQXPs03.3PVD1AdRK76.DOKMEOAiEWeF9bYGYvIS7aMjG6M8uHy
 
+# ─── Receivers ────────────────────────────────────────────────────────────────
 receivers:
   otlp:
     protocols:
+      # gRPC (:4317) — protocolo preferencial para alto volume de traces.
+      # Requer autenticação Basic Auth antes de aceitar qualquer dado.
       grpc:
         endpoint: "0.0.0.0:4317"
         auth:
           authenticator: basicauth/otlp
+      # HTTP (:4318) — alternativa para clientes que não suportam gRPC.
       http:
         endpoint: "0.0.0.0:4318"
         auth:
           authenticator: basicauth/otlp
 
+# ─── Processors ───────────────────────────────────────────────────────────────
 processors:
+  # Proteção contra picos de memória. Se o uso atingir limit_mib (512 MB),
+  # o collector começa a rejeitar dados para evitar OOM.
+  # spike_limit_mib é a tolerância acima do limite antes de acionar o bloqueio.
   memory_limiter:
     check_interval: 1s
     limit_mib: 512
     spike_limit_mib: 128
+
+  # Agrupa mensagens antes de enviar para os backends, reduzindo overhead de rede.
+  # send_batch_size: envia quando acumular 1000 itens
+  # send_batch_max_size: nunca envia mais que 2000 por vez (evita payloads gigantes)
+  # timeout: envia após 10s mesmo que não tenha 1000 itens (garante entrega mínima)
   batch:
     send_batch_size: 1000
     send_batch_max_size: 2000
     timeout: 10s
+
+  # Adiciona o atributo deployment.environment=production em toda a telemetria.
+  # upsert: cria o atributo se não existir, sobrescreve se já existir.
+  # Isso permite filtrar por ambiente no Grafana/Jaeger/Loki.
   resource:
     attributes:
       - key: deployment.environment
         value: production
         action: upsert
 
+# ─── Exporters ────────────────────────────────────────────────────────────────
 exporters:
+  # Envia traces para o Jaeger via gRPC. TLS desabilitado porque a comunicação
+  # é interna na rede Docker — o TLS é terminado no Nginx para tráfego externo.
   otlp/jaeger:
     endpoint: otel-jaeger:4317
     tls:
       insecure: true
+
+  # Envia logs para o Loki via HTTP OTLP. O Loki suporta esse protocolo desde v2.9.
   otlphttp/loki:
     endpoint: http://otel-loki:3100/otlp
+
+  # Expõe métricas em formato Prometheus na porta 9464.
+  # namespace: todas as métricas recebem o prefixo "otel_" (ex: otel_http_requests_total)
+  # resource_to_telemetry_conversion: converte atributos de resource (como service.name)
+  #   em labels Prometheus, permitindo filtrar métricas por serviço no Grafana.
   prometheus:
     endpoint: "0.0.0.0:9464"
     namespace: otel
     resource_to_telemetry_conversion:
       enabled: true
 
+# ─── Service ──────────────────────────────────────────────────────────────────
 service:
   extensions: [health_check, zpages, basicauth/otlp]
+
   pipelines:
+    # Traces: limita memória → agrupa → envia ao Jaeger
     traces:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [otlp/jaeger]
+
+    # Logs: limita memória → agrupa → envia ao Loki
     logs:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [otlphttp/loki]
+
+    # Métricas: limita memória → agrupa → expõe endpoint para o Prometheus fazer scrape
     metrics:
       receivers: [otlp]
       processors: [memory_limiter, batch]
       exporters: [prometheus]
+
   telemetry:
     logs:
+      # Apenas warnings e erros nos logs do próprio collector — evita spam em produção.
       level: warn
     metrics:
+      # Expõe métricas básicas de funcionamento do collector (filas, drops, etc).
       level: basic

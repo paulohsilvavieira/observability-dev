@@ -1,0 +1,42 @@
+# Tempo máximo para considerar um alerta como resolvido após parar de disparar.
+global:
+  resolve_timeout: 5m
+
+# ─── Roteamento ───────────────────────────────────────────────────────────────
+# Define como os alertas são agrupados e para qual receiver são enviados.
+route:
+  # Agrupa alertas com o mesmo nome e job em uma única notificação.
+  group_by: ['alertname', 'job']
+  # Aguarda 30s antes de enviar o primeiro alerta do grupo (acumula outros que chegarem juntos).
+  group_wait: 30s
+  # Aguarda 5min antes de enviar nova notificação para um grupo já notificado com novos alertas.
+  group_interval: 5m
+  # Reenvia o alerta a cada 12h enquanto continuar ativo.
+  repeat_interval: 12h
+  # Receiver padrão — substitua por 'email', 'slack', etc. após configurar abaixo.
+  receiver: 'null'
+
+# ─── Receivers ────────────────────────────────────────────────────────────────
+# Adicione receivers reais aqui (email, Slack, PagerDuty, webhook, etc.)
+# Documentação: https://prometheus.io/docs/alerting/latest/configuration/
+receivers:
+  # Receiver vazio: descarta todos os alertas sem enviar notificação.
+  # Útil para validar o pipeline antes de configurar um canal real.
+  - name: 'null'
+
+  # Exemplo de receiver de email (descomente e configure para usar):
+  # - name: 'email'
+  #   email_configs:
+  #     - to: 'seuemail@exemplo.com'
+  #       from: 'alertmanager@ptechsistemas.com'
+  #       smarthost: 'smtp.exemplo.com:587'
+  #       auth_username: 'usuario'
+  #       auth_password: 'senha'
+  #       require_tls: true
+
+  # Exemplo de receiver Slack (descomente e configure para usar):
+  # - name: 'slack'
+  #   slack_configs:
+  #     - api_url: 'https://hooks.slack.com/services/SEU/WEBHOOK/AQUI'
+  #       channel: '#alertas'
+  #       send_resolved: true

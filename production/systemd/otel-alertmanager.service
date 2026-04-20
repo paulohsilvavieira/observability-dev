@@ -1,0 +1,26 @@
+[Unit]
+Description=Observability - Alertmanager (Alert Routing)
+After=docker.service network-online.target otel-prometheus.service
+Requires=docker.service
+Wants=otel-prometheus.service
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+ExecStartPre=-/usr/bin/docker rm -f otel-alertmanager
+ExecStart=/usr/bin/docker run --rm \
+  --name otel-alertmanager \
+  --network observability-net \
+  -v /opt/observability/configs/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro \
+  -v /opt/observability/data/alertmanager:/alertmanager \
+  prom/alertmanager:v0.27.0 \
+  --config.file=/etc/alertmanager/alertmanager.yaml \
+  --storage.path=/alertmanager \
+  --web.external-url=https://alertmanager.ptechsistemas.com
+ExecStop=/usr/bin/docker stop otel-alertmanager
+
+[Install]
+WantedBy=multi-user.target

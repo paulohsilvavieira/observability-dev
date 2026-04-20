@@ -65,6 +65,28 @@ services:
       retries: 5
       start_period: 20s
 
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: otel-alertmanager
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/alertmanager/alertmanager.yaml
+      - --storage.path=/alertmanager
+    volumes:
+      - ./configs/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
+      - alertmanager_data:/alertmanager
+    networks:
+      - observability-net
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:9093/-/healthy"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.99.0
     container_name: otel-collector
@@ -92,12 +114,13 @@ services:
     container_name: otel-nginx
     restart: unless-stopped
     ports:
-      - "3100:3100"
-      - "16686:16686"
+      - "80:80"
+      - "443:443"
     volumes:
       - ./configs/nginx.conf:/etc/nginx/nginx.conf:ro
       - ./configs/loki.htpasswd:/etc/nginx/loki.htpasswd:ro
       - ./configs/jaeger.htpasswd:/etc/nginx/jaeger.htpasswd:ro
+      - ./configs/alertmanager.htpasswd:/etc/nginx/alertmanager.htpasswd:ro
     networks:
       - observability-net
     depends_on:
@@ -145,4 +168,5 @@ volumes:
   jaeger_data:
   prometheus_data:
   loki_data:
+  alertmanager_data:
   grafana_data:

@@ -16,10 +16,10 @@ ExecStart=/usr/bin/docker run --rm \
   --network observability-net \
   -p 80:80 \
   -p 443:443 \
-  -p 14317:14317 \
   -v /opt/observability/configs/nginx.conf:/etc/nginx/nginx.conf:ro \
   -v /opt/observability/configs/loki.htpasswd:/etc/nginx/loki.htpasswd:ro \
   -v /opt/observability/configs/jaeger.htpasswd:/etc/nginx/jaeger.htpasswd:ro \
+  -v /opt/observability/configs/alertmanager.htpasswd:/etc/nginx/alertmanager.htpasswd:ro \
   -v /opt/observability/certs:/etc/nginx/certs:ro \
   nginx:1.27-alpine
 ExecStop=/usr/bin/docker stop otel-nginx

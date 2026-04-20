@@ -1,2 +1,9 @@
+# Autenticação nativa do Prometheus (não delegada ao Nginx).
+# O Prometheus valida as credenciais antes de servir qualquer endpoint,
+# incluindo /metrics, /-/healthy e a UI web.
+#
+# Formato: usuario: hash_bcrypt
+# O hash é gerado pelo setup.sh usando o algoritmo bcrypt ($2y$, custo 5).
+# Para gerar manualmente: docker run --rm httpd htpasswd -nbB -C 5 usuario senha
 basic_auth_users:
   otel: $2y$05$l8tQXPs03.3PVD1AdRK76.DOKMEOAiEWeF9bYGYvIS7aMjG6M8uHy

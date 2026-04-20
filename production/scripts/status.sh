@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-SERVICES=(otel-jaeger otel-prometheus otel-loki otel-collector otel-nginx)
+SERVICES=(otel-jaeger otel-prometheus otel-loki otel-alertmanager otel-collector otel-nginx)
 CREDENTIALS_FILE="/opt/observability/configs/.credentials"
 
 DOMAIN_JAEGER="jaeger.ptechsistemas.com"
 DOMAIN_PROMETHEUS="prometheus.ptechsistemas.com"
 DOMAIN_LOKI="loki.ptechsistemas.com"
 DOMAIN_OTEL="otel.ptechsistemas.com"
+DOMAIN_ALERTMANAGER="alertmanager.ptechsistemas.com"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -54,12 +55,14 @@ printf "  %-22s %s\n" "OTEL Collector"  "$(check_http http://localhost:13133/)"
 printf "  %-22s %s\n" "Jaeger"          "$(check_http http://localhost:14269/)"
 printf "  %-22s %s\n" "Prometheus"      "$(check_http http://localhost:9090/-/healthy "$(get_cred prometheus USER)" "$(get_cred prometheus PASSWORD)")"
 printf "  %-22s %s\n" "Loki"            "$(check_http http://localhost:3100/ready)"
+printf "  %-22s %s\n" "Alertmanager"    "$(check_http http://localhost:9093/-/healthy)"
 
 echo ""
 echo "  Health checks (HTTPS):"
 printf "  %-22s %s\n" "jaeger.ptechsis"    "$(check_https "https://${DOMAIN_JAEGER}/"           "$(get_cred jaeger     USER)" "$(get_cred jaeger     PASSWORD)")"
 printf "  %-22s %s\n" "prometheus.ptechsis" "$(check_https "https://${DOMAIN_PROMETHEUS}/-/healthy" "$(get_cred prometheus USER)" "$(get_cred prometheus PASSWORD)")"
 printf "  %-22s %s\n" "loki.ptechsis"      "$(check_https "https://${DOMAIN_LOKI}/ready"         "$(get_cred loki       USER)" "$(get_cred loki       PASSWORD)")"
+printf "  %-22s %s\n" "alertmgr.ptechsis"  "$(check_https "https://${DOMAIN_ALERTMANAGER}/-/healthy" "$(get_cred alertmanager USER)" "$(get_cred alertmanager PASSWORD)")"
 
 if [[ -f "$CREDENTIALS_FILE" ]]; then
   echo ""
