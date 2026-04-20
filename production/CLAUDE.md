@@ -41,6 +41,10 @@ sudo ./production/scripts/setup.sh
 # Adicionar Alertmanager a uma instalação existente (sem reinstalar tudo)
 sudo ./production/scripts/setup.sh --add-alertmanager
 
+# Migrar portas para apenas 80/443 (move gRPC 14317→443, remove 9093)
+# Requer DNS A record: grpc.ptechsistemas.com → IP do VPS
+sudo ./production/scripts/setup.sh --migrate-ports
+
 # Health check
 ./production/scripts/status.sh
 
@@ -54,6 +58,8 @@ sudo ./production/scripts/uninstall.sh
 `setup.sh` does: checks prereqs → prompts credentials → generates bcrypt/APR1 hashes → creates Docker network + data dirs → pulls images → writes configs → installs + enables systemd units → runs certbot (Let's Encrypt) → starts services → health checks.
 
 `--add-alertmanager`: detecta instalação existente, coleta só credenciais do Alertmanager, expande o certificado Let's Encrypt com `--expand`, instala o novo systemd unit e reinicia apenas o Nginx.
+
+`--migrate-ports`: remove portas 14317 e 9093 do host, move gRPC para `grpc.ptechsistemas.com:443`, expande o certificado e reinicia Nginx + Alertmanager.
 
 ## Systemd service management
 

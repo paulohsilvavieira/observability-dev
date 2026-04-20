@@ -27,6 +27,7 @@ NC='\033[0m'
 
 ROTATE_CREDENTIALS=false
 ADD_ALERTMANAGER=false
+MIGRATE_PORTS=false
 
 # Per-service credentials
 declare -A SVC_USER SVC_PASS SVC_BCRYPT SVC_APR1
@@ -37,6 +38,7 @@ for arg in "$@"; do
   case $arg in
     --rotate-credentials) ROTATE_CREDENTIALS=true ;;
     --add-alertmanager)   ADD_ALERTMANAGER=true ;;
+    --migrate-ports)      MIGRATE_PORTS=true ;;
     *) echo -e "${RED}[ERROR]${NC} Unknown argument: $arg"; exit 1 ;;
   esac
 done
@@ -512,6 +514,7 @@ print_summary() {
   echo "  Cert renewal cron:        /etc/cron.d/observability-cert-renewal"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo "  Add alertmanager:    sudo ./scripts/setup.sh --add-alertmanager"
+  echo "  Migrate to 80/443:   sudo ./scripts/setup.sh --migrate-ports"
   echo "  Rotate credentials:  sudo ./scripts/setup.sh --rotate-credentials"
   echo "  Service status:      ./scripts/status.sh"
   echo "  Logs:                journalctl -u otel-collector -f"
@@ -629,6 +632,100 @@ CREDEOF
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
+# ─── migrate ports (14317 → 443, remove 9093) ────────────────────────────────
+
+migrate_ports() {
+  log_step "Migrating ports — consolidating everything to 80/443"
+
+  if [[ ! -f "$INSTALL_DIR/configs/.credentials" ]]; then
+    log_error "No existing installation found at $INSTALL_DIR. Run setup.sh without flags first."
+    exit 1
+  fi
+
+  log_warn "This will:"
+  log_warn "  - Remove port 14317 (gRPC) from Nginx — gRPC moves to grpc.${DOMAIN_BASE}:443"
+  log_warn "  - Remove port 9093 (Alertmanager) from host"
+  log_warn "  - Require DNS A record: ${DOMAIN_GRPC} → this server's IP"
+  echo ""
+  read -rp "  DNS for ${DOMAIN_GRPC} is configured — proceed? [y/N] " confirm
+  [[ "$confirm" =~ ^[Yy]$ ]] || { log_info "Aborted."; exit 0; }
+
+  # Expande o certificado para incluir grpc.ptechsistemas.com
+  local cert_live="/etc/letsencrypt/live/${DOMAIN_JAEGER}"
+  if [[ -d "$cert_live" ]]; then
+    log_info "Expanding TLS certificate to include ${DOMAIN_GRPC}..."
+    systemctl stop otel-nginx 2>/dev/null || true
+
+    # Coleta todos os domínios já no cert + o novo
+    local current_domains
+    current_domains=$(certbot certificates 2>/dev/null \
+      | grep -A5 "Certificate Name: ${DOMAIN_JAEGER}" \
+      | grep "Domains:" \
+      | sed 's/.*Domains: //' | tr ' ' '\n' | sort -u | tr '\n' ' ')
+    log_info "Domínios atuais no cert: $current_domains"
+
+    certbot certonly \
+      --standalone \
+      --non-interactive \
+      --agree-tos \
+      --expand \
+      -d "$DOMAIN_JAEGER" \
+      -d "$DOMAIN_PROMETHEUS" \
+      -d "$DOMAIN_LOKI" \
+      -d "$DOMAIN_OTEL" \
+      -d "$DOMAIN_ALERTMANAGER" \
+      -d "$DOMAIN_GRPC"
+
+    cp "${cert_live}/fullchain.pem" "$INSTALL_DIR/certs/fullchain.pem"
+    cp "${cert_live}/privkey.pem"   "$INSTALL_DIR/certs/privkey.pem"
+    chmod 644 "$INSTALL_DIR/certs/fullchain.pem"
+    chmod 600 "$INSTALL_DIR/certs/privkey.pem"
+    log_info "Certificado expandido com ${DOMAIN_GRPC}"
+  else
+    log_warn "Certificado Let's Encrypt não encontrado — pulando expansão."
+  fi
+
+  # Atualiza nginx.conf (remove porta 14317, adiciona grpc.ptechsistemas.com:443)
+  cp "$PRODUCTION_DIR/configs/nginx.conf" "$INSTALL_DIR/configs/nginx.conf"
+  chmod 644 "$INSTALL_DIR/configs/nginx.conf"
+  log_info "nginx.conf atualizado"
+
+  # Atualiza systemd units (remove -p 14317 do nginx, remove -p 9093 do alertmanager)
+  cp "$PRODUCTION_DIR/systemd/otel-nginx.service"        "$SYSTEMD_DIR/otel-nginx.service"
+  cp "$PRODUCTION_DIR/systemd/otel-alertmanager.service" "$SYSTEMD_DIR/otel-alertmanager.service"
+  chmod 644 "$SYSTEMD_DIR/otel-nginx.service" \
+            "$SYSTEMD_DIR/otel-alertmanager.service"
+  systemctl daemon-reload
+  log_info "Systemd units atualizados"
+
+  # Atualiza endpoint gRPC no .credentials
+  sed -i "s|OTEL_EXPORTER_OTLP_ENDPOINT=.*|OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_GRPC}|" \
+    "$INSTALL_DIR/configs/.credentials" 2>/dev/null || true
+
+  # Reinicia serviços afetados
+  systemctl restart otel-nginx
+  log_info "  Restarted: otel-nginx"
+
+  if systemctl is-active --quiet otel-alertmanager; then
+    systemctl restart otel-alertmanager
+    log_info "  Restarted: otel-alertmanager"
+  fi
+
+  wait_healthy "Nginx" "http://localhost:80"
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Migração concluída — apenas portas 80 e 443 expostas"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Atualize as variáveis de ambiente das aplicações:"
+  echo ""
+  echo "    OTEL_EXPORTER_OTLP_ENDPOINT=https://${DOMAIN_GRPC}      (gRPC)"
+  echo "    OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=https://${DOMAIN_OTEL}  (HTTP)"
+  echo ""
+  echo "  Grafana Alertmanager datasource: https://${DOMAIN_ALERTMANAGER}"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+}
+
 # ─── main ─────────────────────────────────────────────────────────────────────
 
 main() {
@@ -640,6 +737,11 @@ main() {
 
   if [[ "$ADD_ALERTMANAGER" == "true" ]]; then
     add_alertmanager_to_existing
+    return
+  fi
+
+  if [[ "$MIGRATE_PORTS" == "true" ]]; then
+    migrate_ports
     return
   fi
 
