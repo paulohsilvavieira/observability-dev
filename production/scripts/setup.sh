@@ -602,33 +602,36 @@ CREDEOF
     log_warn "Let's Encrypt cert not found — skipping cert expansion. Add $DOMAIN_ALERTMANAGER manually if needed."
   fi
 
-  # Atualiza nginx.conf e htpasswd no lugar
+  # Atualiza nginx.conf, htpasswd e systemd unit do Nginx
   cp "$PRODUCTION_DIR/configs/nginx.conf" "$INSTALL_DIR/configs/nginx.conf"
+  chmod 644 "$INSTALL_DIR/configs/nginx.conf"
+  cp "$PRODUCTION_DIR/systemd/otel-nginx.service" "$SYSTEMD_DIR/otel-nginx.service"
+  chmod 644 "$SYSTEMD_DIR/otel-nginx.service"
+  log_info "nginx.conf e otel-nginx.service atualizados (volume alertmanager.htpasswd adicionado)"
 
-  # Pull e instala systemd unit
+  # Pull e instala systemd unit do Alertmanager
   docker pull prom/alertmanager:v0.27.0
   cp "$PRODUCTION_DIR/systemd/otel-alertmanager.service" "$SYSTEMD_DIR/otel-alertmanager.service"
   chmod 644 "$SYSTEMD_DIR/otel-alertmanager.service"
   systemctl daemon-reload
 
-  # Inicia serviços
+  # Inicia Alertmanager e reinicia Nginx para carregar novo config + htpasswd
   systemctl enable --now otel-alertmanager
   log_info "  Started: otel-alertmanager"
 
   systemctl restart otel-nginx
-  log_info "  Restarted: otel-nginx (new alertmanager server block active)"
+  log_info "  Restarted: otel-nginx"
 
-  # Health check
+  # Health checks
   wait_healthy "Alertmanager" "http://localhost:9093/-/healthy"
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  echo "  Alertmanager added successfully"
+  echo "  Alertmanager adicionado com sucesso"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   printf "  %-14s %-44s %s / %s\n" "Alertmanager" "https://${DOMAIN_ALERTMANAGER}" "${SVC_USER[alertmanager]}" "${SVC_PASS[alertmanager]}"
   echo ""
-  echo "  Grafana datasource URL (Grafana no host): http://localhost:9093"
-  echo "  Grafana datasource URL (Grafana em Docker na mesma rede): http://otel-alertmanager:9093"
+  echo "  Grafana Alertmanager datasource: https://${DOMAIN_ALERTMANAGER}"
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 }
 
