@@ -13,6 +13,8 @@ services:
       COLLECTOR_OTLP_ENABLED: "true"
     volumes:
       - jaeger_data:/badger
+    ports:
+      - "16686:16686"
     networks:
       - observability-net
     healthcheck:
@@ -56,6 +58,8 @@ services:
     volumes:
       - ./configs/loki.yaml:/etc/loki/config.yaml:ro
       - loki_data:/loki
+    ports:
+      - "3100:3100"
     networks:
       - observability-net
     healthcheck:
@@ -75,6 +79,8 @@ services:
     volumes:
       - ./configs/alertmanager.yaml:/etc/alertmanager/alertmanager.yaml:ro
       - alertmanager_data:/alertmanager
+    ports:
+      - "9093:9093"
     networks:
       - observability-net
     depends_on:
@@ -88,7 +94,7 @@ services:
       start_period: 10s
 
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:0.99.0
+    image: otel/opentelemetry-collector-contrib:0.150.1
     container_name: otel-collector
     restart: unless-stopped
     command: --config=/etc/otelcol/config.yaml

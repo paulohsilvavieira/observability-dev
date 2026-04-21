@@ -426,7 +426,7 @@ pull_images() {
   docker pull prom/prometheus:v2.51.2
   docker pull prom/alertmanager:v0.27.0
   docker pull grafana/loki:3.4.2
-  docker pull otel/opentelemetry-collector-contrib:0.99.0
+  docker pull otel/opentelemetry-collector-contrib:0.150.1
   docker pull nginx:1.27-alpine
 
   log_info "All images pulled"
@@ -449,10 +449,13 @@ start_services() {
     log_info "  Started: $service"
   done
 
-  systemctl enable --now otel-nginx
+  # Nginx e Collector sempre reiniciados para garantir config e volumes atualizados
+  systemctl enable otel-nginx
+  systemctl restart otel-nginx
   log_info "  Started: otel-nginx"
 
-  systemctl enable --now otel-collector
+  systemctl enable otel-collector
+  systemctl restart otel-collector
   log_info "  Started: otel-collector"
 }
 

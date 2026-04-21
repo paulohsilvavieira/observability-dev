@@ -1,17 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Fluxo de logs:
+// ABORDAGEM ANTIGA — envio direto ao Loki via winston-loki (LokiTransport)
 //
-//   Winston (Console) ──────────────────────────────────────────→ stdout
-//   otelLogger.emit() → OTel SDK → BatchLogRecordProcessor
-//                     → OTLPLogExporter (HTTP)
-//                     → OTEL Collector (/v1/logs)
-//                     → Loki
+// Fluxo: Winston → LokiTransport → Loki (direto, sem passar pelo Collector)
 //
-// A app não precisa conhecer o endereço do Loki — apenas o Collector.
-// traceId e spanId são injetados em cada log para correlação com traces no Grafana.
+// Por que foi substituída:
+//   - Cria um segundo caminho paralelo ao OTel SDK (duplicação de logs)
+//   - A app precisa conhecer o endereço do Loki diretamente (LOKI_HOST)
+//   - Se o Loki mudar de endereço ou auth, é preciso atualizar a app
+//   - Logs enviados via LokiTransport não carregam os metadados OTel
+//     (traceId/spanId não são correlacionados automaticamente no Loki)
+//
+// Substituída por: logger.config.ts (envia via OTel SDK → Collector → Loki)
 // ─────────────────────────────────────────────────────────────────────────────
 
+/* eslint-disable @typescript-eslint/no-unsafe-assignment */
+/* eslint-disable @typescript-eslint/no-unsafe-call */
 import { ConsoleLogger } from '@nestjs/common';
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const LokiTransport = require('winston-loki');
 import * as winston from 'winston';
 import * as dotenv from 'dotenv';
 import { utilities as nestWinstonUtils } from 'nest-winston';
@@ -19,13 +25,11 @@ import { logs, SeverityNumber } from '@opentelemetry/api-logs';
 import { trace } from '@opentelemetry/api';
 dotenv.config();
 
-// Instância do logger OTel — conectada ao SDK inicializado em otel.ts
 const otelLogger = logs.getLogger('my-nestjs-app');
 
 const { combine, timestamp, json } = winston.format;
 const { nestLike } = nestWinstonUtils.format;
 
-// Mapeia níveis do Winston para os severity names do OTel/GCP
 const levels: object = {
   default: 'DEFAULT',
   debug: 'DEBUG',
@@ -38,25 +42,35 @@ const severity = winston.format((info) => {
   const { level } = info;
   return Object.assign({}, info, { severity: levels[level] });
 });
-
-// Formato legível no terminal (dev) vs JSON estruturado (produção)
 const remoteFormat = () => combine(severity(), json());
 const localFormat = () => combine(timestamp(), severity(), nestLike());
 const isLocal = process.env.NODE_ENV === 'development';
 
 export class LoggerConfig extends ConsoleLogger {
-  // Winston cuida apenas do stdout — o envio ao Loki é feito pelo OTel SDK
   private logger = winston.createLogger({
     level: process.env.NODE_ENV === 'development' ? 'debug' : 'info',
     format: isLocal ? localFormat() : remoteFormat(),
-    transports: [new winston.transports.Console()],
+    transports: [
+      new winston.transports.Console(),
+
+      // Caminho direto ao Loki — substituído pelo OTel SDK em logger.config.ts
+      new LokiTransport({
+        host: process.env.LOKI_HOST || 'http://127.0.0.1:3100',
+        labels: {
+          app: 'my-nest-log',
+          environment: process.env.NODE_ENV || 'development',
+        },
+        json: true,
+        format: winston.format.json(),
+        silent: true,
+      }),
+    ],
   });
 
   constructor() {
     super();
   }
 
-  // Retorna traceId e spanId do span ativo para correlacionar logs com traces
   private getTraceInfo() {
     const activeSpan = trace.getActiveSpan();
     if (activeSpan) {
@@ -67,6 +81,15 @@ export class LoggerConfig extends ConsoleLogger {
       };
     }
     return {};
+  }
+
+  // Ativava o LokiTransport após o bootstrap para não logar durante a inicialização.
+  // Na nova abordagem isso não é necessário — o OTel SDK gerencia o envio internamente.
+  enableLoki() {
+    const lokiTransport = this.logger.transports.find(
+      (t) => t instanceof LokiTransport,
+    );
+    if (lokiTransport) lokiTransport.silent = false;
   }
 
   log(message: any, context?: string) {
@@ -109,9 +132,12 @@ export class LoggerConfig extends ConsoleLogger {
     }
   }
 
-  // Contextos de bootstrap do NestJS que geram ruído nos logs de produção
   private shouldLog(context?: string): boolean {
-    if (process.env.NODE_ENV === 'development') return true;
+    const isDev = process.env.NODE_ENV === 'development';
+
+    if (isDev) {
+      return true;
+    }
 
     const ignoredContexts = [
       'InstanceLoader',

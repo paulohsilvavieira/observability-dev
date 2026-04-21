@@ -19,14 +19,38 @@ pnpm run test:e2e
 
 ## Environment variables (`.env` / `.env.example`)
 
-| Variable                          | Default                      | Purpose                         |
-|-----------------------------------|------------------------------|---------------------------------|
-| `NODE_ENV`                        | `development`                | Switches log format + verbosity |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`     | `http://localhost:14317`     | gRPC endpoint (traces, metrics) |
-| `OTEL_EXPORTER_OTLP_HTTP_ENDPOINT`| `http://localhost:14318`     | HTTP endpoint (logs via OTel)   |
-| `LOKI_HOST`                       | `http://127.0.0.1:3100`      | Direct Loki push (Winston)      |
-| `OTEL_SERVICE_NAME`               | `my-nestjs-app`              | Resource label on all signals   |
-| `PORT`                            | `3000`                       | HTTP listen port                |
+| Variable                           | Default                      | Purpose                                      |
+|------------------------------------|------------------------------|----------------------------------------------|
+| `NODE_ENV`                         | `development`                | Switches log format + verbosity              |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`      | `http://localhost:14317`     | gRPC endpoint (traces, metrics)              |
+| `OTEL_EXPORTER_OTLP_HTTP_ENDPOINT` | `http://localhost:14318`     | HTTP endpoint (logs via OTel)                |
+| `OTEL_EXPORTER_OTLP_HEADERS`       | —                            | Auth header — ver nota abaixo                |
+| `OTEL_SERVICE_NAME`                | `my-nestjs-app`              | Resource label on all signals                |
+| `PORT`                             | `3000`                       | HTTP listen port                             |
+
+### Auth com OTEL Collector (Basic Auth)
+
+O SDK Node.js **não propaga `OTEL_EXPORTER_OTLP_HEADERS` automaticamente para exporters gRPC**. O `src/otel.ts` faz a leitura manual e aplica:
+
+- gRPC (traces, metrics): via `Metadata` do `@grpc/grpc-js`
+- HTTP (logs): via `headers` no construtor do exporter
+
+Formato do env:
+```env
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(user:pass)>
+```
+
+```bash
+# Gerar o valor base64:
+echo -n "otel:minha-senha" | base64
+```
+
+Para produção (VPS), use os endpoints com HTTPS:
+```env
+OTEL_EXPORTER_OTLP_ENDPOINT=https://grpc.ptechsistemas.com
+OTEL_EXPORTER_OTLP_HTTP_ENDPOINT=https://otel.ptechsistemas.com
+OTEL_EXPORTER_OTLP_HEADERS=Authorization=Basic <base64(user:pass)>
+```
 
 ## Key source files
 
@@ -37,12 +61,12 @@ pnpm run test:e2e
 
 ### `src/logger.config.ts` — Winston logger (`LoggerConfig`)
 - Extends `ConsoleLogger` so NestJS uses it as the app logger.
-- Two transports: `Console` (always on) + `LokiTransport` (starts `silent: true`).
-- `enableLoki()` must be called after `app.listen()` in `main.ts` to activate Loki push.
+- Transports: `Console` (sempre ativo). Sem push direto ao Loki — logs chegam ao Loki via OTel Collector.
 - Injects `traceId` / `spanId` from the active OTel span into every log entry.
-- Also emits each log to the OTel log SDK via `logs.getLogger('my-nestjs-app')`.
+- Emits each log to the OTel log SDK via `logs.getLogger('my-nestjs-app')` → Collector → Loki.
 - In production, suppresses noisy NestJS bootstrap contexts (`InstanceLoader`, `RoutesResolver`, etc.).
 - Log format: `nestLike` (local) / JSON with `severity` field (remote).
+- `src/logger.config.direct-loki.ts` — versão antiga com push direto ao Loki, mantida como referência.
 
 ### `src/telemetry.service.ts` — injectable metrics/tracer service
 - Exposes `tracer` (OTel `trace.getTracer`) and `meter` (OTel `metrics.getMeter`).
@@ -52,4 +76,3 @@ pnpm run test:e2e
 ### `src/main.ts`
 - Calls `initializeTracing()` before anything else.
 - Passes `LoggerConfig` instance to `NestFactory.create`.
-- Calls `logger.enableLoki()` after `app.listen()`.

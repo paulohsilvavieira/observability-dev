@@ -17,6 +17,28 @@ docker compose -f docker-compose.prod.yml down -v   # full reset, removes volume
 Default credentials for local sim: user `otel` / password `observability123`. Never use on a real server.
 Note: docker-compose.prod.yml does not have TLS — it is for local testing only.
 
+## Atualizar OTEL Collector em produção (sem reinstalar)
+
+```bash
+# Baixar nova imagem
+docker pull otel/opentelemetry-collector-contrib:0.150.1
+
+# Atualizar versão no service file
+sudo sed -i 's/opentelemetry-collector-contrib:0.99.0/opentelemetry-collector-contrib:0.150.1/' \
+  /etc/systemd/system/otel-collector.service
+
+# Recarregar e reiniciar
+sudo systemctl daemon-reload
+sudo systemctl restart otel-collector
+
+# Verificar
+sudo systemctl status otel-collector
+curl http://localhost:13133
+```
+
+> **Importante**: versões anteriores a 0.100.0 do collector não suportam bcrypt no basicauth inline.
+> Use sempre 0.150.1 ou superior para garantir suporte a `$2y$` (htpasswd bcrypt).
+
 ## VM deployment — prerequisites
 
 `setup.sh` installs missing packages (`docker.io`, `certbot`, `curl`, `openssl`) automatically via `apt-get`. Requires Ubuntu/Debian.
@@ -155,3 +177,4 @@ Todas as UIs e endpoints (Jaeger, Prometheus, Loki, Alertmanager, OTEL HTTP, OTE
 | OTEL batch          | 1 msg / 100ms             | 1000 msgs / 10s                     |
 | Debug exporter      | Enabled                   | Removed                             |
 | Image versions      | latest                    | Pinned                              |
+| OTEL Collector      | 0.150.1                   | 0.150.1 (bcrypt support)            |

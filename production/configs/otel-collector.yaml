@@ -17,7 +17,7 @@ extensions:
   basicauth/otlp:
     htpasswd:
       inline: |
-        otel:$2y$05$l8tQXPs03.3PVD1AdRK76.DOKMEOAiEWeF9bYGYvIS7aMjG6M8uHy
+        otel:$2y$05$KYXTB2efR9C4impd/5pgi.Z7OroRsjeUWqCSdgHYZmuGzgCkAG2I.
 
 # ─── Receivers ────────────────────────────────────────────────────────────────
 receivers:

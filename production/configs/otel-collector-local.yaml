@@ -1,0 +1,64 @@
+# Configuração do OTEL Collector para testes locais — sem autenticação.
+# NÃO usar em produção. Para produção use otel-collector.yaml (com basicauth).
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+  zpages:
+    endpoint: 0.0.0.0:55679
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: "0.0.0.0:4317"
+      http:
+        endpoint: "0.0.0.0:4318"
+
+processors:
+  memory_limiter:
+    check_interval: 1s
+    limit_mib: 512
+    spike_limit_mib: 128
+  batch:
+    send_batch_size: 1000
+    send_batch_max_size: 2000
+    timeout: 10s
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: local
+        action: upsert
+
+exporters:
+  otlp/jaeger:
+    endpoint: otel-jaeger:4317
+    tls:
+      insecure: true
+  otlphttp/loki:
+    endpoint: http://otel-loki:3100/otlp
+  prometheus:
+    endpoint: "0.0.0.0:9464"
+    namespace: otel
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  extensions: [health_check, zpages]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/jaeger]
+    logs:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlphttp/loki]
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+  telemetry:
+    logs:
+      level: warn
+    metrics:
+      level: basic
