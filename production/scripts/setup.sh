@@ -476,14 +476,29 @@ wait_healthy() {
   return 1
 }
 
+# Verifica saúde via docker exec (para containers sem porta exposta no host)
+wait_healthy_exec() {
+  local name="$1" container="$2" url="$3"
+  local retries=20
+
+  log_info "Waiting for $name..."
+  for _ in $(seq 1 $retries); do
+    docker exec "$container" wget -q --spider "$url" &>/dev/null && { log_info "  $name is healthy"; return 0; }
+    sleep 3
+  done
+
+  log_error "$name did not become healthy in time"
+  return 1
+}
+
 check_health() {
   log_step "Running health checks"
 
   wait_healthy "OTEL Collector" "http://localhost:13133/"
   wait_healthy "Jaeger"         "http://localhost:14269/"
   wait_healthy "Prometheus"     "http://localhost:9090/-/healthy" "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
-  wait_healthy "Loki"           "http://localhost:3100/ready"
-  wait_healthy "Alertmanager"   "http://localhost:9093/-/healthy"
+  wait_healthy      "Loki"         "http://localhost:3100/ready"
+  wait_healthy_exec "Alertmanager" "otel-alertmanager" "http://localhost:9093/-/healthy"
 }
 
 # ─── summary ──────────────────────────────────────────────────────────────────
@@ -623,7 +638,7 @@ CREDEOF
   log_info "  Restarted: otel-nginx"
 
   # Health checks
-  wait_healthy "Alertmanager" "http://localhost:9093/-/healthy"
+  wait_healthy_exec "Alertmanager" "otel-alertmanager" "http://localhost:9093/-/healthy"
 
   echo ""
   echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
