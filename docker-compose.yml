@@ -32,6 +32,8 @@ services:
     image: grafana/grafana
     ports:
       - 3400:3000
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
     depends_on:
       - prometheus
       - loki

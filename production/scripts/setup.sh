@@ -16,8 +16,9 @@ DOMAIN_LOKI="loki.${DOMAIN_BASE}"
 DOMAIN_OTEL="otel.${DOMAIN_BASE}"
 DOMAIN_ALERTMANAGER="alertmanager.${DOMAIN_BASE}"
 DOMAIN_GRPC="grpc.${DOMAIN_BASE}"
+DOMAIN_GRAFANA="grafana.${DOMAIN_BASE}"
 
-SERVICES=(otel-jaeger otel-prometheus otel-loki otel-alertmanager otel-collector otel-nginx)
+SERVICES=(otel-jaeger otel-prometheus otel-loki otel-alertmanager otel-collector otel-nginx otel-grafana)
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -169,6 +170,7 @@ setup_credentials() {
   prompt_credential "Loki             (log query)"                 "loki"         "otel-loki"
   prompt_credential "Jaeger           (trace UI)"                  "jaeger"       "otel-jaeger"
   prompt_credential "Alertmanager     (alert routing UI)"          "alertmanager" "otel-alertmanager"
+  prompt_credential "Grafana          (dashboard admin)"           "grafana"      "admin"
 
   generate_hashes
 }
@@ -184,8 +186,8 @@ setup_tls() {
   read -rp "  Email for Let's Encrypt notifications [${email}]: " input_email
   email="${input_email:-$email}"
 
-  log_info "Running certbot for: $DOMAIN_JAEGER $DOMAIN_PROMETHEUS $DOMAIN_LOKI $DOMAIN_OTEL $DOMAIN_ALERTMANAGER $DOMAIN_GRPC"
-  log_warn "DNS A records for all six subdomains must point to this server's IP before continuing."
+  log_info "Running certbot for: $DOMAIN_JAEGER $DOMAIN_PROMETHEUS $DOMAIN_LOKI $DOMAIN_OTEL $DOMAIN_ALERTMANAGER $DOMAIN_GRPC $DOMAIN_GRAFANA"
+  log_warn "DNS A records for all seven subdomains must point to this server's IP before continuing."
   read -rp "  DNS is configured — proceed? [y/N] " confirm
   [[ "$confirm" =~ ^[Yy]$ ]] || { log_error "Aborted. Set up DNS and re-run."; exit 1; }
 
@@ -199,7 +201,8 @@ setup_tls() {
     -d "$DOMAIN_LOKI" \
     -d "$DOMAIN_OTEL" \
     -d "$DOMAIN_ALERTMANAGER" \
-    -d "$DOMAIN_GRPC"
+    -d "$DOMAIN_GRPC" \
+    -d "$DOMAIN_GRAFANA"
 
   local cert_live="/etc/letsencrypt/live/${DOMAIN_JAEGER}"
   cp "${cert_live}/fullchain.pem" "$INSTALL_DIR/certs/fullchain.pem"
@@ -250,12 +253,14 @@ setup_directories() {
     "$INSTALL_DIR/data/loki/chunks" \
     "$INSTALL_DIR/data/loki/rules" \
     "$INSTALL_DIR/data/loki/compactor" \
-    "$INSTALL_DIR/data/alertmanager"
+    "$INSTALL_DIR/data/alertmanager" \
+    "$INSTALL_DIR/data/grafana"
 
   chown -R 65534:65534 "$INSTALL_DIR/data/prometheus"
   chown -R 65534:65534 "$INSTALL_DIR/data/alertmanager"
   chown -R 10001:10001 "$INSTALL_DIR/data/loki"
   chown -R 10001:10001 "$INSTALL_DIR/data/jaeger"
+  chown -R 472:0      "$INSTALL_DIR/data/grafana"
   log_info "Directories ready at $INSTALL_DIR"
 }
 
@@ -361,6 +366,56 @@ PROMEOF
             "$INSTALL_DIR/configs/jaeger.htpasswd" \
             "$INSTALL_DIR/configs/alertmanager.htpasswd"
 
+  # Grafana env file — credenciais do admin do Grafana
+  cat > "$INSTALL_DIR/configs/grafana.env" << GRAFANAEOF
+GF_SECURITY_ADMIN_USER=${SVC_USER[grafana]}
+GF_SECURITY_ADMIN_PASSWORD=${SVC_PASS[grafana]}
+GRAFANAEOF
+  chmod 600 "$INSTALL_DIR/configs/grafana.env"
+
+  # Grafana datasources provisioning — gerado com credenciais do Prometheus substituídas
+  mkdir -p "$INSTALL_DIR/configs/grafana-provisioning/datasources"
+  cat > "$INSTALL_DIR/configs/grafana-provisioning/datasources/datasources.yaml" << GRAFANADSEOF
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    access: proxy
+    url: http://otel-prometheus:9090
+    isDefault: true
+    uid: prometheus
+    basicAuth: true
+    basicAuthUser: ${SVC_USER[prometheus]}
+    secureJsonData:
+      basicAuthPassword: ${SVC_PASS[prometheus]}
+    editable: false
+
+  - name: Loki
+    type: loki
+    access: proxy
+    url: http://otel-loki:3100
+    uid: loki
+    editable: false
+
+  - name: Jaeger
+    type: jaeger
+    access: proxy
+    url: http://otel-jaeger:16686
+    uid: jaeger
+    editable: false
+
+  - name: Alertmanager
+    type: alertmanager
+    access: proxy
+    url: http://otel-alertmanager:9093
+    uid: alertmanager
+    jsonData:
+      implementation: prometheus
+    editable: false
+GRAFANADSEOF
+  chmod 644 "$INSTALL_DIR/configs/grafana-provisioning/datasources/datasources.yaml"
+
   # Credentials reference (root-only)
   local b64_collector
   b64_collector=$(echo -n "${SVC_USER[collector]}:${SVC_PASS[collector]}" | base64)
@@ -396,6 +451,11 @@ URL=https://${DOMAIN_JAEGER}
 USER=${SVC_USER[alertmanager]}
 PASSWORD=${SVC_PASS[alertmanager]}
 URL=https://${DOMAIN_ALERTMANAGER}
+
+[grafana]
+USER=${SVC_USER[grafana]}
+PASSWORD=${SVC_PASS[grafana]}
+URL=https://${DOMAIN_GRAFANA}
 CREDEOF
   chmod 600 "$INSTALL_DIR/configs/.credentials"
 
@@ -426,6 +486,7 @@ pull_images() {
   docker pull prom/prometheus:v2.51.2
   docker pull prom/alertmanager:v0.27.0
   docker pull grafana/loki:3.4.2
+  docker pull grafana/grafana:10.4.2
   docker pull otel/opentelemetry-collector-contrib:0.150.1
   docker pull nginx:1.27-alpine
 
@@ -439,7 +500,7 @@ start_services() {
 
   if [[ "$ROTATE_CREDENTIALS" == "true" ]]; then
     log_info "Restarting services to apply new credentials..."
-    systemctl restart otel-collector otel-prometheus otel-alertmanager otel-nginx
+    systemctl restart otel-collector otel-prometheus otel-alertmanager otel-nginx otel-grafana
     log_info "Services restarted"
     return
   fi
@@ -457,6 +518,9 @@ start_services() {
   systemctl enable otel-collector
   systemctl restart otel-collector
   log_info "  Started: otel-collector"
+
+  systemctl enable --now otel-grafana
+  log_info "  Started: otel-grafana"
 }
 
 # ─── health checks ────────────────────────────────────────────────────────────
@@ -502,6 +566,7 @@ check_health() {
   wait_healthy "Prometheus"     "http://localhost:9090/-/healthy" "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
   wait_healthy      "Loki"         "http://localhost:3100/ready"
   wait_healthy_exec "Alertmanager" "otel-alertmanager" "http://localhost:9093/-/healthy"
+  wait_healthy_exec "Grafana"      "otel-grafana"      "http://localhost:3000/api/health"
 }
 
 # ─── summary ──────────────────────────────────────────────────────────────────
@@ -520,6 +585,7 @@ print_summary() {
   printf "  %-14s %-44s %s / %s\n" "Prometheus" "https://${DOMAIN_PROMETHEUS}"     "${SVC_USER[prometheus]}" "${SVC_PASS[prometheus]}"
   printf "  %-14s %-44s %s / %s\n" "Loki"       "https://${DOMAIN_LOKI}"           "${SVC_USER[loki]}"       "${SVC_PASS[loki]}"
   printf "  %-14s %-44s %s / %s\n" "Alertmanager" "https://${DOMAIN_ALERTMANAGER}"   "${SVC_USER[alertmanager]}" "${SVC_PASS[alertmanager]}"
+  printf "  %-14s %-44s %s / %s\n" "Grafana"    "https://${DOMAIN_GRAFANA}"        "${SVC_USER[grafana]}"    "${SVC_PASS[grafana]}"
   printf "  %-14s %-44s %s / %s\n" "OTEL HTTP"  "https://${DOMAIN_OTEL}"           "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
   printf "  %-14s %-44s %s / %s\n" "OTEL gRPC"  "https://${DOMAIN_GRPC}"       "${SVC_USER[collector]}"  "${SVC_PASS[collector]}"
   echo ""

@@ -1,0 +1,24 @@
+[Unit]
+Description=Observability - Grafana (Dashboards)
+After=docker.service network-online.target otel-prometheus.service otel-loki.service
+Requires=docker.service
+Wants=otel-prometheus.service otel-loki.service
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=60
+TimeoutStopSec=30
+
+ExecStartPre=-/usr/bin/docker rm -f otel-grafana
+ExecStart=/usr/bin/docker run --rm \
+  --name otel-grafana \
+  --network observability-net \
+  --env-file /opt/observability/configs/grafana.env \
+  -v /opt/observability/data/grafana:/var/lib/grafana \
+  -v /opt/observability/configs/grafana-provisioning:/etc/grafana/provisioning:ro \
+  grafana/grafana:10.4.2
+ExecStop=/usr/bin/docker stop otel-grafana
+
+[Install]
+WantedBy=multi-user.target

@@ -53,6 +53,7 @@ DNS A records required before running setup (all pointing to the VPS IP):
 | `otel.ptechsistemas.com`             | OTEL Collector HTTP (OTLP/HTTP)|
 | `grpc.ptechsistemas.com`             | OTEL Collector gRPC (OTLP/gRPC)|
 | `alertmanager.ptechsistemas.com`     | Alertmanager UI                |
+| `grafana.ptechsistemas.com`          | Grafana Dashboards             |
 
 ## VM deployment
 
@@ -86,7 +87,7 @@ sudo ./production/scripts/uninstall.sh
 ## Systemd service management
 
 ```bash
-systemctl status  otel-jaeger | otel-prometheus | otel-loki | otel-alertmanager | otel-collector | otel-nginx
+systemctl status  otel-jaeger | otel-prometheus | otel-loki | otel-alertmanager | otel-collector | otel-nginx | otel-grafana
 systemctl restart otel-collector
 journalctl -u otel-jaeger -f
 
